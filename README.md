@@ -40,17 +40,18 @@ the highest-yield 15 KB in the budget, but it is not free.
 
 ## Companion plugins (optional, same author)
 
-- **review-all** — multi-agent diff review: 10 reviewer axes with pinned model tiers,
-  an adversarial verifier pass that kills false positives, per-axis checkpointing
-  keyed on HEAD + diff hash.
+- **[review-all](https://github.com/ncoevoet/claude-review-all)** — multi-agent diff
+  review: 10 reviewer axes with pinned model tiers, an adversarial verifier pass that
+  kills false positives, per-axis checkpointing keyed on HEAD + diff hash.
   `claude plugin marketplace add ncoevoet/claude-review-all && claude plugin install review-all@ncoevoet-review-all`
-- **goal-loop** — drives an objective under a hard deterministic oracle enforced by a
-  Stop hook, with stuck-detection and run budgets that escalate to a human as
-  UNVERIFIED instead of looping forever.
+- **[goal-loop](https://github.com/ncoevoet/claude-loop)** — drives an objective under
+  a hard deterministic oracle enforced by a Stop hook, with stuck-detection and run
+  budgets that escalate to a human as UNVERIFIED instead of looping forever.
   `claude plugin marketplace add ncoevoet/claude-loop && claude plugin install goal-loop@ncoevoet-loop`
-- **claude-markdown-health-check** — audits your `.claude/` tree (skills, hooks,
-  settings, memory, plugins) for dead refs, broken frontmatter, budget overflow,
-  dormant skills, and context bloat. Run it after any skills/hooks change.
+- **[claude-markdown-health-check](https://github.com/ncoevoet/claude-markdown-health-check)**
+  — audits your `.claude/` tree (skills, hooks, settings, memory, plugins) for dead
+  refs, broken frontmatter, budget overflow, dormant skills, and context bloat. Run it
+  after any skills/hooks change.
   `claude plugin marketplace add ncoevoet/claude-markdown-health-check && claude plugin install claude-markdown-health-check@ncoevoet-health-check`
 
 ## What to adapt
