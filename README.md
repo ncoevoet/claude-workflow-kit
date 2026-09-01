@@ -5,8 +5,9 @@
 An evidence-first Claude Code workflow, packaged as a plugin. One install gives you:
 verification standards with a claim-class proof table, a 7-phase plan/spec/build
 methodology with an adversarial spec review, subagent model tiers enforced by hooks,
-and the CodeGraph MCP for structural code queries. Extracted from a working setup
-after a deep transcript audit tuned each piece against measured waste.
+and the [CodeGraph](https://github.com/colbymchenry/codegraph) MCP for structural code
+queries. Extracted from a working setup after a deep transcript audit tuned each
+piece against measured waste.
 
 ## Install
 
@@ -26,7 +27,7 @@ into your `~/.claude`.
 | Methodology | Same hook injects [`context/groundwork.md`](context/groundwork.md) | FRAME → INTERVIEW → PLAN → SPEC (sub-agent) → **adversarial spec review** → GATE → BUILD (churn-breaker, delegation threshold, parallel fan-out rules) → REVIEW of the integrated diff |
 | Model-pin guard | `PreToolUse` on `Agent\|Task` → [`hooks/agent-model-pin.sh`](hooks/agent-model-pin.sh) | Denies any subagent spawn without an explicit `model`: **haiku** (read-only mechanical) · **sonnet** (mechanical with edits) · **opus** (judgment). Forks exempt |
 | Bash guard | `PreToolUse` on `Bash` → [`hooks/bash-guard.sh`](hooks/bash-guard.sh) | Blocks `cd <current-dir> && …` prefixes (cwd persists between calls) and bare symbol-greps in CodeGraph-indexed repos; literal-text searches stay allowed |
-| CodeGraph MCP | [`.mcp.json`](.mcp.json) declares `npx -y @colbymchenry/codegraph serve --mcp` | Sub-millisecond, AST-accurate "where is X / what calls Y" queries. `npx` fetches the package on first use — nothing to preinstall |
+| [CodeGraph](https://github.com/colbymchenry/codegraph) MCP | [`.mcp.json`](.mcp.json) declares `npx -y @colbymchenry/codegraph serve --mcp` | Sub-millisecond, AST-accurate "where is X / what calls Y" queries. `npx` fetches the package on first use — nothing to preinstall |
 
 CodeGraph needs a per-repository index before it answers: run `codegraph init -i`
 (or `npx -y @colbymchenry/codegraph init -i`) once in each repo you want indexed.
