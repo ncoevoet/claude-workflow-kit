@@ -1,11 +1,12 @@
 # workflow-kit
 
-[![version](https://img.shields.io/badge/version-0.1.0-blue)](.claude-plugin/plugin.json)
+[![version](https://img.shields.io/badge/version-0.2.0-blue)](.claude-plugin/plugin.json)
 
 An evidence-first Claude Code workflow, packaged as a plugin. One install gives you:
 verification standards with a claim-class proof table, a 7-phase plan/spec/build
-methodology with an adversarial spec review, subagent model tiers enforced by hooks,
-and the [CodeGraph](https://github.com/colbymchenry/codegraph) MCP for structural code
+methodology with an adversarial spec review, a pre-commit review gate over everything
+changed since the last review, subagent model tiers enforced by hooks, and the
+[CodeGraph](https://github.com/colbymchenry/codegraph) MCP for structural code
 queries. Extracted from a working setup after a deep transcript audit tuned each
 piece against measured waste.
 
@@ -23,10 +24,11 @@ into your `~/.claude`.
 
 | Component | Mechanism | Effect |
 |---|---|---|
-| Verification standards | `SessionStart` hook injects [`context/verification-standards.md`](context/verification-standards.md) | Every session starts with the honesty/verification rules and the claim-class table (static / runtime / data / rendering / tooling — each with its one admissible proof) |
+| Verification standards | `SessionStart` → [`hooks/inject-context.sh`](hooks/inject-context.sh) injects [`context/verification-standards.md`](context/verification-standards.md) | Every session starts with the honesty/verification rules and the claim-class table (static / runtime / data / rendering / tooling — each with its one admissible proof) |
 | Methodology | Same hook injects [`context/groundwork.md`](context/groundwork.md) | FRAME → INTERVIEW → PLAN → SPEC (sub-agent) → **adversarial spec review** → GATE → BUILD (churn-breaker, delegation threshold, parallel fan-out rules) → REVIEW of the integrated diff |
 | Model-pin guard | `PreToolUse` on `Agent\|Task` → [`hooks/agent-model-pin.sh`](hooks/agent-model-pin.sh) | Denies any subagent spawn without an explicit `model`: **haiku** (read-only mechanical) · **sonnet** (mechanical with edits) · **opus** (judgment). Forks exempt |
 | Bash guard | `PreToolUse` on `Bash` → [`hooks/bash-guard.sh`](hooks/bash-guard.sh) | Blocks `cd <current-dir> && …` prefixes (cwd persists between calls) and bare symbol-greps in CodeGraph-indexed repos; literal-text searches stay allowed |
+| Commit gate | [`skills/commit-gate-guard`](skills/commit-gate-guard/SKILL.md) + `PreToolUse` on `Bash` → [`hooks/commit-gate-check.sh`](hooks/commit-gate-check.sh) | One small, bounded review pass over everything changed **since the last recorded review** — not just the staged diff — before `git commit`. Blocks on a CRITICAL/IMPORTANT finding. **Opt-in per repo**: the hook stays out of the way until you `mkdir -p .claude/.commit-gate` |
 | [CodeGraph](https://github.com/colbymchenry/codegraph) MCP | [`.mcp.json`](.mcp.json) declares `npx -y @colbymchenry/codegraph serve --mcp` | Sub-millisecond, AST-accurate "where is X / what calls Y" queries. `npx` fetches the package on first use — nothing to preinstall |
 
 CodeGraph needs a per-repository index before it answers: run `codegraph init -i`
@@ -80,14 +82,32 @@ guard); and an interrupted review run that discarded ~42% of its output tokens f
 lack of checkpoints (hence review-all's per-axis resume). Every rule in this kit
 traces to one of those measurements.
 
+The commit gate was added after a measured miss of a different kind: a full review ran, its
+findings were fixed, and the *fix* introduced a boolean-precedence bug that reached the merge
+request. Typecheck, lint, the browser check and the whole spec suite were green — the specs
+having been written in the same pass, under the same wrong assumption. A review only ever sees
+the code as it was when it ran; the gate closes the window after it.
+
+## Tests
+
+```bash
+./tests/run.sh
+```
+
+Deterministic, no network, no API key. Validates every JSON manifest, checks that each hook
+referenced by `hooks.json` exists and is executable, checks skill frontmatter, runs `bash -n`
+and `shellcheck`, then exercises all three hooks end-to-end against their real stdin/exit-code
+contract — including a throwaway git repo for the commit gate (opt-in off, no marker, stale
+marker, matching marker, docs-only, `--dry-run`).
+
 ## Uninstall
 
 ```bash
 claude plugin uninstall workflow-kit@ncoevoet-workflow
 ```
 
-Everything lives inside the plugin — uninstalling removes the injected context, both
-hooks, and the MCP declaration in one step.
+Everything lives inside the plugin — uninstalling removes the injected context, every
+hook, the commit gate, and the MCP declaration in one step.
 
 ## License
 
