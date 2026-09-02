@@ -117,5 +117,81 @@ check "docs-only staged -> allowed"           0 commit-gate-check.sh "{\"tool_in
 rm -rf "$repo" "$repo2" "$RUN_TRACKED_DIR"
 
 echo
+echo "== spec-gate-check.sh =="
+# Opt-in root 7 levels above the edited file, to prove the walk is uncapped (the commit
+# gate stops at 6 because it starts from cwd; this one starts from a source file).
+sg=$(mktemp -d)
+deep="$sg/a/b/c/d/e/f/g"; mkdir -p "$deep"
+SPEC_DIR="$sg/.claude/specs"
+
+ed() { # ed <abs-file> -> Edit payload
+    printf '{"tool_input":{"file_path":"%s"},"cwd":"%s"}' "$1" "$sg"
+}
+
+# Not enabled anywhere: never blocks, whatever the file count.
+check "no opt-in dir -> allowed"              0 spec-gate-check.sh "$(ed "$deep/a.ts")"
+
+mkdir -p "$sg/.claude/.spec-gate"
+export WORKFLOW_SPEC_GATE_FREE_FILES=0
+
+# Enabled, no spec at all.
+check "opt-in, no spec -> blocked"            2 spec-gate-check.sh "$(ed "$deep/a.ts")"
+check "docs are never gated"                  0 spec-gate-check.sh "$(ed "$sg/README.md")"
+check ".claude/ files never gated"            0 spec-gate-check.sh "$(ed "$sg/.claude/settings.json")"
+check "ExitPlanMode, no spec -> blocked"      2 spec-gate-check.sh "{\"tool_input\":{},\"cwd\":\"$sg\"}"
+
+# Writing the spec must never be blocked, including when it creates the directory,
+# and including with FREE_FILES=0 (self-lockout regression).
+check "spec write allowed (creates dir)"      0 spec-gate-check.sh "$(ed "$SPEC_DIR/x.md")"
+mkdir -p "$SPEC_DIR"
+
+# A spec with no adversarial-review section does not satisfy the gate.
+printf '# Spec: x\n\n## Steps\n1. do it\n' > "$SPEC_DIR/x.md"
+printf '%s\n' "$SPEC_DIR/x.md" > "$sg/.claude/.spec-gate/current"
+check "spec without review section -> blocked" 2 spec-gate-check.sh "$(ed "$deep/a.ts")"
+
+# Findings-style section passes. Uses BLOCKER via concatenation so this file does not
+# itself look like a findings list to any future scanner.
+SEV="BLOCK""ER"
+{ printf '# Spec: x\n\n## Adversarial review\n\n'; printf -- '- %s: something is wrong\n' "$SEV"; printf -- '- GAP: something is missing\n- NOTE: minor\n'; } > "$SPEC_DIR/x.md"
+check "review section with findings -> allowed" 0 spec-gate-check.sh "$(ed "$deep/a.ts")"
+
+# "none found" needs six enumerated checks; two is not enough.
+{ printf '# Spec: x\n\n## Adversarial review\n\nVerified, none found.\n\n'; printf -- '- requirements\n- files\n'; } > "$SPEC_DIR/x.md"
+check "none-found with 2 checks -> blocked"   2 spec-gate-check.sh "$(ed "$deep/a.ts")"
+{ printf '# Spec: x\n\n## Adversarial review\n\nVerified, none found.\n\n'; printf -- '- requirements\n- files\n- verify checks\n- edge paths\n- premises\n- contracts\n'; } > "$SPEC_DIR/x.md"
+check "none-found with 6 checks -> allowed"   0 spec-gate-check.sh "$(ed "$deep/a.ts")"
+
+# A markdown table is this repo's house style for structured lists and must count.
+{ printf '# Spec: x\n\n## Adversarial review\n\nVerified, none found.\n\n'; printf '| # | check |\n|---|---|\n'; for i in 1 2 3 4 5 6; do printf '| %s | c%s |\n' "$i" "$i"; done; } > "$SPEC_DIR/x.md"
+check "none-found as 6-row table -> allowed"  0 spec-gate-check.sh "$(ed "$deep/a.ts")"
+
+# Pointer hygiene: expired, or naming a spec outside the resolved root, does not unlock.
+{ printf '# Spec: x\n\n## Adversarial review\n\n'; printf -- '- %s: x\n' "$SEV"; } > "$SPEC_DIR/x.md"
+touch -d '-2 days' "$sg/.claude/.spec-gate/current"
+check "expired pointer -> blocked"            2 spec-gate-check.sh "$(ed "$deep/a.ts")"
+printf '%s\n' "$SPEC_DIR/x.md" > "$sg/.claude/.spec-gate/current"
+other=$(mktemp -d); mkdir -p "$other/.claude/specs"
+cp "$SPEC_DIR/x.md" "$other/.claude/specs/x.md"
+printf '%s\n' "$other/.claude/specs/x.md" > "$sg/.claude/.spec-gate/current"
+check "pointer outside root -> blocked"       2 spec-gate-check.sh "$(ed "$deep/a.ts")"
+printf '%s\n' "$SPEC_DIR/x.md" > "$sg/.claude/.spec-gate/current"
+
+# Free-file budget: first N distinct files pass without any spec.
+rm -f "$sg/.claude/.spec-gate/current" "$sg/.claude/.spec-gate/touched"
+WORKFLOW_SPEC_GATE_FREE_FILES=2 check "1st file free"  0 spec-gate-check.sh "$(ed "$deep/f1.ts")"
+WORKFLOW_SPEC_GATE_FREE_FILES=2 check "2nd file free"  0 spec-gate-check.sh "$(ed "$deep/f2.ts")"
+WORKFLOW_SPEC_GATE_FREE_FILES=2 check "3rd file gated" 2 spec-gate-check.sh "$(ed "$deep/f3.ts")"
+
+# Kill switch.
+WORKFLOW_SPEC_GATE=off check "kill switch -> allowed" 0 spec-gate-check.sh "$(ed "$deep/a.ts")"
+
+# Write creating a not-yet-existing directory must still resolve (readlink -m, not -f).
+check "write into missing dir -> blocked"     2 spec-gate-check.sh "$(ed "$deep/brand/new/dir/n.ts")"
+
+unset WORKFLOW_SPEC_GATE_FREE_FILES
+rm -rf "$sg" "$other"
+
+echo
 echo "hooks: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -9,7 +9,7 @@
     {
       "name": "workflow-kit",
       "source": "./",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "description": "Evidence-first Claude Code workflow: verification standards with claim-class proofs, a 7-phase plan/spec/build methodology with adversarial spec review, a pre-commit review gate over everything changed since the last review that also blocks while verification is still running, subagent model tiers and a foreground-waiting guard enforced by hooks, and the CodeGraph MCP for structural code queries.",
       "author": {
         "name": "Nicolas Coevoet",

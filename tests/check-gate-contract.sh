@@ -117,4 +117,41 @@ grep -qF 'bash-guard.sh' "$STANDARDS" \
     && ok "standards credit the enforcing hook" \
     || fail "standards no longer name bash-guard.sh as the enforcer"
 
+echo
+echo "11. spec gate <-> groundwork <-> README"
+SPEC_HOOK="$ROOT/hooks/spec-gate-check.sh"
+GROUNDWORK="$ROOT/context/groundwork.md"
+COMMIT_HOOK="$ROOT/hooks/commit-gate-check.sh"
+
+in_files "opt-in dir named everywhere"   '.claude/.spec-gate' "$SPEC_HOOK" "$README" "$GROUNDWORK"
+in_files "spec path convention shared"   '.claude/specs/'     "$SPEC_HOOK" "$GROUNDWORK"
+in_files "review heading shared"         '## Adversarial review' "$SPEC_HOOK" "$GROUNDWORK" "$README"
+
+# The heading the hook actually matches, not just the literal in its message. If groundwork's
+# skeleton and this awk pattern drift by one character every correct run is falsely blocked,
+# and the behavioural tests stay green because they use their own fixtures.
+grep -qF '[Aa]dversarial[[:space:]]+[Rr]eview' "$SPEC_HOOK" \
+    && ok "hook matcher pattern present (not just the prose literal)" \
+    || fail "spec-gate matcher pattern changed — re-pin it against groundwork's skeleton"
+
+# Both gates must agree on what counts as code.
+excl='(\.md$|^\.claude/|/\.claude/)'
+if grep -qF -- "$excl" "$SPEC_HOOK" && grep -qF -- "$excl" "$COMMIT_HOOK"; then
+    ok "both gates share the code/docs exclusion literal"
+else
+    fail "the two gates no longer share the exclusion literal"
+fi
+
+grep -qF 'exits 0 unless' "$SPEC_HOOK" \
+    && ok "spec gate documents its opt-in" \
+    || fail "spec-gate-check.sh no longer documents the opt-in"
+
+# Every env var the hook reads must be documented, or users cannot find the escape.
+for v in WORKFLOW_SPEC_GATE WORKFLOW_SPEC_GATE_FREE_FILES WORKFLOW_SPEC_GATE_WINDOW_MIN WORKFLOW_SPEC_GATE_TTL_MIN; do
+    grep -qF "$v" "$README" || fail "env var $v is read by the hook but undocumented in README"
+done
+grep -qF 'WORKFLOW_SPEC_GATE=off' "$SPEC_HOOK" \
+    && ok "block message names the kill switch" \
+    || fail "spec-gate block message no longer names WORKFLOW_SPEC_GATE"
+
 exit "$rc"

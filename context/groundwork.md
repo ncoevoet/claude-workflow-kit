@@ -1,7 +1,9 @@
 # Groundwork — how I always work
 
 These rules always govern how I work. They are not a command or skill to invoke — they are always in
-effect. For trivial edits (typo, rename, obvious one-liner), use judgment and just make the edit.
+effect. For trivial edits (typo, rename, obvious one-liner), use judgment and just make the edit. Where the
+spec gate is armed, the machine approximation of "trivial" is the first two distinct files in a
+two-hour window; a third file requires the spec.
 
 ## Principles
 
@@ -51,12 +53,19 @@ phases in order before and during the change. Skip the whole flow for trivial ed
   checks that cannot fail, unhandled edge/error paths, premises the current tree contradicts,
   and step-to-step contracts that don't line up. It returns findings only (BLOCKER / GAP /
   NOTE, each with evidence) and edits nothing. The main thread adjudicates, patches the spec,
-  then proceeds to GATE. One pass; re-check only the fixes — no adversary/writer ping-pong.
+  then records the adjudicated findings in the spec under a final `## Adversarial review`
+  section — BLOCKER/GAP/NOTE entries, or, when the review found nothing, "none found" plus
+  the six categories that were checked (list items or table rows both count) — and only then
+  proceeds to GATE. The reviewer still edits nothing; the main thread writes the section, so
+  what lands is adjudicated rather than raw. One pass; re-check only the fixes — no
+  adversary/writer ping-pong. In repos that opt in with `mkdir -p .claude/.spec-gate` this is hook-enforced (`spec-gate-check.sh`).
 
 ### 5. GATE
 
 - Call **ExitPlanMode** to present the plan for explicit user approval.
 - HARD GATE: edit no file until the user approves.
+- In opt-in repos `ExitPlanMode` is hook-enforced: approval is refused until the SPEC file and
+  its `## Adversarial review` section exist.
 - This *uses* native `ExitPlanMode` as its gate — it does not replace native plan mode.
 
 ### 6. BUILD
@@ -152,6 +161,9 @@ The sub-agent writes ONE file: the SPEC-phase target spec file (`.claude/specs/<
 
 ## Final verification gate
 - <how to confirm the whole task is correct before declaring done>
+
+## Adversarial review
+- <BLOCKER/GAP/NOTE findings with verdicts, or "none found" + the 6 checks run>
 ```
 
 ### Field rules

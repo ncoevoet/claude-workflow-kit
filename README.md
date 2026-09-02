@@ -1,6 +1,6 @@
 # workflow-kit
 
-[![version](https://img.shields.io/badge/version-0.3.0-blue)](.claude-plugin/plugin.json)
+[![version](https://img.shields.io/badge/version-0.4.0-blue)](.claude-plugin/plugin.json)
 
 An evidence-first Claude Code workflow, packaged as a plugin. One install gives you:
 verification standards with a claim-class proof table, a 7-phase plan/spec/build
@@ -31,6 +31,7 @@ into your `~/.claude`.
 | Model-pin guard | `PreToolUse` on `Agent\|Task` → [`hooks/agent-model-pin.sh`](hooks/agent-model-pin.sh) | Denies any subagent spawn without an explicit `model`: **haiku** (read-only mechanical) · **sonnet** (mechanical with edits) · **opus** (judgment). Forks exempt |
 | Bash guard | `PreToolUse` on `Bash` → [`hooks/bash-guard.sh`](hooks/bash-guard.sh) | Blocks `cd <current-dir> && …` prefixes (cwd persists between calls), bare symbol-greps in CodeGraph-indexed repos, and **foreground waiting** — an `until`/`while` poll loop or a `sleep` of 10s or more on the main thread. The message names the fix: the same command with `run_in_background: true` for one completion notification, or `Monitor` for one per occurrence. Literal-text searches, background runs and short settling delays stay allowed |
 | Commit gate | [`skills/commit-gate-guard`](skills/commit-gate-guard/SKILL.md) + `PreToolUse` on `Bash` → [`hooks/commit-gate-check.sh`](hooks/commit-gate-check.sh) | One small, bounded review pass over everything changed **since the last recorded review** — not just the staged diff — before `git commit`. Blocks on a CRITICAL/IMPORTANT finding, and blocks while a tracked verification run is still alive (`.claude/.commit-gate/inflight/<kind>.pid`, or `bg-watch`'s `run-tracked-<kind>.pid`). **Opt-in per repo**: the hook stays out of the way until you `mkdir -p .claude/.commit-gate` |
+| Spec gate | `PreToolUse` on `ExitPlanMode` and `Edit|Write` → [`hooks/spec-gate-check.sh`](hooks/spec-gate-check.sh) | Refuses plan approval, and the third source file in two hours, until the SPEC phase produced `.claude/specs/<slug>.md` carrying an `## Adversarial review` section — BLOCKER/GAP/NOTE entries, or "none found" plus the six checks run. Structural, not semantic: it proves the artifact exists, not that the adversary was good, so it stops silent skipping rather than deliberate circumvention. **Opt-in per repo**: `mkdir -p .claude/.spec-gate`. Tunable: `WORKFLOW_SPEC_GATE_FREE_FILES` (2), `WORKFLOW_SPEC_GATE_WINDOW_MIN` (120), `WORKFLOW_SPEC_GATE_TTL_MIN` (480), `WORKFLOW_SPEC_GATE=off`. `ExitPlanMode` carries no file path, so it resolves the repo from `cwd` then `$CLAUDE_PROJECT_DIR` and stays silent if neither is inside the opt-in repo |
 | [CodeGraph](https://github.com/colbymchenry/codegraph) MCP | [`.mcp.json`](.mcp.json) declares `npx -y @colbymchenry/codegraph serve --mcp` | Sub-millisecond, AST-accurate "where is X / what calls Y" queries. `npx` fetches the package on first use — nothing to preinstall |
 
 CodeGraph needs a per-repository index before it answers: run `codegraph init -i`
@@ -69,7 +70,7 @@ the highest-yield 15 KB in the budget, but it is not free.
    subagents without a `model` gets denied with a message naming the tiers; it
    self-corrects on retry. Too strict on day one? Remove the `Agent|Task` block from
    [`hooks/hooks.json`](hooks/hooks.json) in your fork.
-3. **Both guard hooks require `jq`** (present on most dev machines). Without it they
+3. **The guard hooks require `jq`** (present on most dev machines). Without it they
    fail open — nothing breaks, nothing is enforced.
 
 ## Why these exact rules (the evidence, briefly)
@@ -107,7 +108,7 @@ the code as it was when it ran; the gate closes the window after it.
 
 Deterministic, no network, no API key. Validates every JSON manifest, checks that each hook
 referenced by `hooks.json` exists and is executable, checks skill frontmatter, runs `bash -n`
-and `shellcheck`, then exercises all three hooks end-to-end against their real stdin/exit-code
+and `shellcheck`, then exercises all four hooks end-to-end against their real stdin/exit-code
 contract — including a throwaway git repo for the commit gate (opt-in off, no marker, stale
 marker, matching marker, docs-only, `--dry-run`).
 
