@@ -138,7 +138,11 @@ export WORKFLOW_SPEC_GATE_FREE_FILES=0
 check "opt-in, no spec -> blocked"            2 spec-gate-check.sh "$(ed "$deep/a.ts")"
 check "docs are never gated"                  0 spec-gate-check.sh "$(ed "$sg/README.md")"
 check ".claude/ files never gated"            0 spec-gate-check.sh "$(ed "$sg/.claude/settings.json")"
+# The plan gate needs a prior edit in this repo before it will fire (see the ExitPlanMode
+# block further down for why); prime it so this assertion tests the spec check, not that.
+printf '%s\t%s\n' "$(date +%s)" "$deep/seed.ts" > "$sg/.claude/.spec-gate/touched"
 check "ExitPlanMode, no spec -> blocked"      2 spec-gate-check.sh "{\"tool_input\":{},\"cwd\":\"$sg\"}"
+rm -f "$sg/.claude/.spec-gate/touched"
 
 # Writing the spec must never be blocked, including when it creates the directory,
 # and including with FREE_FILES=0 (self-lockout regression).
@@ -188,6 +192,18 @@ WORKFLOW_SPEC_GATE=off check "kill switch -> allowed" 0 spec-gate-check.sh "$(ed
 
 # Write creating a not-yet-existing directory must still resolve (readlink -m, not -f).
 check "write into missing dir -> blocked"     2 spec-gate-check.sh "$(ed "$deep/brand/new/dir/n.ts")"
+
+# ExitPlanMode has no file path, so it cannot know which repo a plan targets: it resolves the
+# root from cwd. Blocking on that alone falsely refuses a plan whose work lives in a DIFFERENT
+# repo, whenever the shell happens to sit in an opt-in one. Only gate it once the session has
+# actually edited something here.
+rm -f "$sg/.claude/.spec-gate/touched" "$sg/.claude/.spec-gate/current"
+check "ExitPlanMode, nothing touched -> allowed" 0 spec-gate-check.sh "{\"tool_input\":{},\"cwd\":\"$sg\"}"
+printf '%s\t%s\n' "$(date +%s)" "$deep/a.ts" > "$sg/.claude/.spec-gate/touched"
+check "ExitPlanMode after an edit -> blocked"    2 spec-gate-check.sh "{\"tool_input\":{},\"cwd\":\"$sg\"}"
+printf '%s\t%s\n' "$((`date +%s` - 99999))" "$deep/a.ts" > "$sg/.claude/.spec-gate/touched"
+check "ExitPlanMode, stale touches -> allowed"   0 spec-gate-check.sh "{\"tool_input\":{},\"cwd\":\"$sg\"}"
+rm -f "$sg/.claude/.spec-gate/touched"
 
 unset WORKFLOW_SPEC_GATE_FREE_FILES
 rm -rf "$sg" "$other"

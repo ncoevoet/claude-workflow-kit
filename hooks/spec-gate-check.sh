@@ -64,6 +64,16 @@ if [ -n "$path" ]; then
     grep -qE '(\.md$|^\.claude/|/\.claude/)' <<<"$rel" && exit 0
 fi
 
+# ExitPlanMode carries no file path, so `root` came from cwd — which is the shell's location,
+# not necessarily the repo the plan is about. Refusing a plan on that alone falsely blocks work
+# targeting a different repo whenever the shell sits in an opt-in one. Only gate the plan once
+# this session has actually edited something here.
+if [ -z "$path" ]; then
+    now=$(date +%s); cutoff=$((now - WINDOW_MIN * 60))
+    recent=$(awk -v c="$cutoff" -F'\t' '$1 >= c' "$gate_dir/touched" 2>/dev/null | grep -c .)
+    [ "$recent" -eq 0 ] && exit 0
+fi
+
 # --- spec resolution ------------------------------------------------------------------
 spec=""
 if [ -f "$pointer" ]; then
@@ -102,7 +112,7 @@ else
     fi
 fi
 
-# --- free-file budget (edits only; reaching ExitPlanMode already asserts non-trivial) ---
+# --- free-file budget (edits only; the plan path is gated above, on prior edits) ---
 if [ -n "$path" ]; then
     touched="$gate_dir/touched"
     now=$(date +%s); cutoff=$((now - WINDOW_MIN * 60))
