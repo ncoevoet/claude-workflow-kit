@@ -73,32 +73,28 @@ the highest-yield 15 KB in the budget, but it is not free.
 3. **The guard hooks require `jq`** (present on most dev machines). Without it they
    fail open — nothing breaks, nothing is enforced.
 
-## Why these exact rules (the evidence, briefly)
+## Why these rules
 
-A deep audit of 27 real sessions found: near-zero mid-task user corrections (the
-interview + plan gate works — keep it); rework loops of 5–9 edits to the same file on
-the main thread (hence the churn-breaker: 3rd edit → delegate with the failure
-output); 12/49 subagent spawns silently inheriting the premium main-loop model and
-zero use of the cheap tier (hence the pin hook and the three tiers); 360 redundant
-`cd` prefixes and a 105:1 grep-vs-index ratio for symbol lookups (hence the bash
-guard); and an interrupted review run that discarded ~42% of its output tokens for
-lack of checkpoints (hence review-all's per-axis resume). Every rule in this kit
-traces to one of those measurements.
+Each rule answers a failure that actually happened, not a preference:
 
-Two rules were added after a second audit, of 8 days across 12 repos. **Foreground waiting**
-was the largest single sink: 168 Bash calls carrying a `sleep`, holding the main thread for
-**244 minutes** in total (mean 87s, max 10 min), plus 71 of 174 background shells whose only
-job was to wait — against 8 uses of the `Monitor` tool in the same period. Hence the wait
-guard and the Waiting section. **In-flight verification** came from the gate's own logic: a
-`last-pass` marker proves a review ran, but nothing proved the test run that review depended
-on had finished, and a bounded `for i in $(seq 1 N)` poll loop prints its "finished" banner
-whether or not the process exited.
-
-The commit gate was added after a measured miss of a different kind: a full review ran, its
-findings were fixed, and the *fix* introduced a boolean-precedence bug that reached the merge
-request. Typecheck, lint, the browser check and the whole spec suite were green — the specs
-having been written in the same pass, under the same wrong assumption. A review only ever sees
-the code as it was when it ran; the gate closes the window after it.
+- **Interview + plan gate** — mid-task corrections were already rare with it. Kept.
+- **Churn-breaker (3rd edit of a file → delegate)** — long rework loops on the main thread kept
+  not converging; a fresh agent handed the failure output did.
+- **Subagent model tiers, hook-enforced** — spawns silently inherited the main loop's premium
+  model and the cheap tier went unused. A default nobody sets is a default nobody notices.
+- **Bash guard** — `cd` into the current directory is always redundant, and a symbol grep in an
+  indexed repo is the slower, less accurate way to ask a question the index already answers.
+- **Foreground-wait guard** — waiting was the largest single sink of main-thread time, while the
+  tool built for it went almost unused. A blocked foreground call cannot even be interrupted.
+- **In-flight block** — a recorded PASS proves a review ran, not that the test run it depended on
+  had finished; a bounded poll loop prints its "finished" banner whether or not the process exited.
+- **Commit gate** — a review ran, its findings were fixed, and the *fix* introduced a bug that
+  reached the merge request with typecheck, lint, browser check and the full suite green, the specs
+  having been written in the same pass under the same wrong assumption. A review only ever sees the
+  code as it was when it ran; the gate closes the window after it.
+- **Spec gate** — SPEC and its adversarial review were the only phases in this methodology with no
+  enforcement behind them, and they were the ones that got skipped. Every rule with a hook was
+  followed, including when it blocked and forced another approach. Prose lost; hooks won.
 
 ## Tests
 
