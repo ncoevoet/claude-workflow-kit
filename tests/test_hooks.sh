@@ -41,10 +41,24 @@ check "plain command is allowed"              0 bash-guard.sh "{\"tool_input\":{
 check "symbol grep blocked when indexed"      2 bash-guard.sh "{\"tool_input\":{\"command\":\"$symbol_grep\"},\"cwd\":\"$tmp_cg\"}"
 check "symbol grep allowed when not indexed"  0 bash-guard.sh "{\"tool_input\":{\"command\":\"$symbol_grep\"},\"cwd\":\"$tmp_plain\"}"
 check "literal multi-word grep allowed"       0 bash-guard.sh "{\"tool_input\":{\"command\":\"$literal_grep\"},\"cwd\":\"$tmp_cg\"}"
+
+# Foreground waiting: a poll loop or a >=10s delay on the main thread is blocked; the same
+# work with run_in_background is not, and short settling delays outside a loop stay allowed.
+poll_loop='until ss -ltn | grep -q 4210; do sleep 3; done'
+check "foreground poll loop blocked"          2 bash-guard.sh "{\"tool_input\":{\"command\":\"$poll_loop\"},\"cwd\":\"$tmp_plain\"}"
+check "same poll loop in background allowed"  0 bash-guard.sh "{\"tool_input\":{\"command\":\"$poll_loop\",\"run_in_background\":true},\"cwd\":\"$tmp_plain\"}"
+check "long bare delay blocked"               2 bash-guard.sh "{\"tool_input\":{\"command\":\"sleep 240; gh pr checks 3\"},\"cwd\":\"$tmp_plain\"}"
+check "bounded for-loop poll blocked"         2 bash-guard.sh "{\"tool_input\":{\"command\":\"for i in 1 2 3; do pgrep pytest || break; sleep 10; done\"},\"cwd\":\"$tmp_plain\"}"
+check "short settling delay allowed"          0 bash-guard.sh "{\"tool_input\":{\"command\":\"kill -9 123; sleep 1; pgrep -f stub\"},\"cwd\":\"$tmp_plain\"}"
+check "quoted sleep literal allowed"          0 bash-guard.sh "{\"tool_input\":{\"command\":\"grep -n 'sleep 30' notes.txt\"},\"cwd\":\"$tmp_plain\"}"
+check "heredoc writing a wait loop allowed"   0 bash-guard.sh "{\"tool_input\":{\"command\":\"cat > w.sh <<EOF\\nsleep 30\\nEOF\"},\"cwd\":\"$tmp_plain\"}"
 rm -rf "$tmp_plain" "$tmp_cg"
 
 echo
 echo "== commit-gate-check.sh =="
+# Point the bg-watch PID lookup at a scratch dir so a real run on this machine cannot
+# leak into the assertions below.
+RUN_TRACKED_DIR=$(mktemp -d); export RUN_TRACKED_DIR
 # Throwaway git repo with one staged code file.
 repo=$(mktemp -d)
 (
@@ -66,6 +80,26 @@ check "--dry-run ignored"                     0 commit-gate-check.sh "{\"tool_in
 ( cd "$repo" && git diff --cached | sha256sum | cut -d' ' -f1 > .claude/.commit-gate/last-pass )
 check "marker matches staged diff -> allowed" 0 commit-gate-check.sh "$J"
 
+# In-flight verification blocks the commit even with a matching marker.
+mkdir -p "$repo/.claude/.commit-gate/inflight"
+sleep 300 & live=$!
+echo "$live" > "$repo/.claude/.commit-gate/inflight/test.pid"
+check "live gate run -> blocked"              2 commit-gate-check.sh "$J"
+
+mv "$repo/.claude/.commit-gate/inflight/test.pid" "$repo/.claude/.commit-gate/inflight/dev-server.pid"
+check "dev/serve kind never blocks"           0 commit-gate-check.sh "$J"
+
+echo "$live" > "$RUN_TRACKED_DIR/run-tracked-build.pid"
+check "bg-watch pid file honoured"            2 commit-gate-check.sh "$J"
+rm -f "$RUN_TRACKED_DIR/run-tracked-build.pid"
+
+kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+dead=$(bash -c 'echo $$')
+echo "$dead" > "$repo/.claude/.commit-gate/inflight/test.pid"
+rm -f "$repo/.claude/.commit-gate/inflight/dev-server.pid"
+check "stale pid file does not block"         0 commit-gate-check.sh "$J"
+rm -rf "$repo/.claude/.commit-gate/inflight"
+
 ( cd "$repo" && echo "const b = 2;" >> src/a.ts && git add src/a.ts )
 check "stale marker -> blocked"               2 commit-gate-check.sh "$J"
 
@@ -80,7 +114,7 @@ repo2=$(mktemp -d)
     echo "## docs" >> README.md; git add README.md
 ) >/dev/null 2>&1
 check "docs-only staged -> allowed"           0 commit-gate-check.sh "{\"tool_input\":{\"command\":\"git commit -m d\"},\"cwd\":\"$repo2\"}"
-rm -rf "$repo" "$repo2"
+rm -rf "$repo" "$repo2" "$RUN_TRACKED_DIR"
 
 echo
 echo "hooks: $pass passed, $fail failed"

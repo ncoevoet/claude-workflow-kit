@@ -134,14 +134,31 @@ A project skill should state that it runs this review step too, rather than sile
 ## Enforcement hook (opt-in per repository)
 
 `hooks/commit-gate-check.sh` blocks `git commit` when the staged diff does not match
-`last-pass`. It is **opt-in**: it exits 0 unless `.claude/.commit-gate/` exists in the
-repository, so installing the plugin never blocks commits in repos that do not use the gate.
+`last-pass`, **or while a tracked verification run is still alive**. It is **opt-in**: it
+exits 0 unless `.claude/.commit-gate/` exists in the repository, so installing the plugin
+never blocks commits in repos that do not use the gate.
 
 Enable it in a repo with:
 
 ```sh
 mkdir -p .claude/.commit-gate
 ```
+
+### In-flight verification
+
+A gate proves nothing until it exits. The hook therefore refuses a commit while any of these
+PID files names a live process:
+
+- `.claude/.commit-gate/inflight/<kind>.pid` — write one from whatever launches your gates.
+- `$RUN_TRACKED_DIR/run-tracked-<kind>.pid` (default `/tmp`) — the `bg-watch` skill's
+  convention, honoured when that skill is installed.
+
+Kinds beginning `dev` or `serve` are long-lived servers, not verification, and never block.
+A PID file whose process is gone is stale and does not block either — delete it. No PID
+files means nothing to wait for, so this stays invisible in repos that do not use it.
+
+This closes the same hole the marker closes, one step earlier: `last-pass` proves a review
+ran, and this proves the run it depended on actually finished.
 
 ## Rules
 

@@ -36,6 +36,27 @@ staged=$(git diff --cached --name-only 2>/dev/null)
 [ -n "$staged" ] || exit 0
 if ! grep -qvE '(\.md$|^\.claude/|/\.claude/)' <<<"$staged"; then exit 0; fi
 
+# In-flight verification. A gate is only proof once it has exited, so a commit is refused
+# while a tracked run is still alive. PID files are the opt-in: none present, nothing blocks.
+#   - "$gate_dir/inflight/<kind>.pid"  — written by whatever launches your gates
+#   - $RUN_TRACKED_DIR/run-tracked-<kind>.pid — the bg-watch skill's convention (default /tmp)
+# Kinds starting with dev/serve are long-lived servers, not verification, and never block.
+inflight=""
+for pid_file in "$gate_dir"/inflight/*.pid "${RUN_TRACKED_DIR:-/tmp}"/run-tracked-*.pid; do
+    [ -f "$pid_file" ] || continue
+    kind=$(basename "$pid_file" .pid); kind="${kind#run-tracked-}"
+    case "$kind" in dev*|serve*) continue ;; esac
+    pid=$(tr -dc '0-9' < "$pid_file")
+    [ -n "$pid" ] || continue
+    kill -0 "$pid" 2>/dev/null && inflight="$inflight
+  $kind (pid $pid) — $pid_file"
+done
+if [ -n "$inflight" ]; then
+    echo "Commit blocked — verification is still running:$inflight" >&2
+    echo "A gate proves nothing until it exits: wait for the run and read its exit code. If the process is gone, the PID file is stale — delete it." >&2
+    exit 2
+fi
+
 marker="$gate_dir/last-pass"
 if [ ! -f "$marker" ]; then
     echo "Commit blocked — no commit-gate PASS recorded." >&2

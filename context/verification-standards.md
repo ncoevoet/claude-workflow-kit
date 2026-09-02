@@ -3,7 +3,12 @@
 ## Subagents
 
 - Pin a model on every spawn (hook-enforced by `agent-model-pin.sh`): **haiku** = read-only mechanical (searches, enumeration, log mining) · **sonnet** = mechanical with edits (tests, migrations, formatting) · **opus** = judgment (design, root-cause, security, review verification). Forks inherit the parent model.
-- Never poll for subagents with `date`/`sleep` loops — completion notifications arrive on their own; use Monitor only for external state the harness cannot track.
+
+## Waiting — never spend the main thread on it
+
+- **Never block a foreground Bash call on a condition or a deadline** (hook-enforced by `bash-guard.sh`). A foreground `until`/`while` … `sleep` … `done` loop holds the main thread for its whole duration and cannot be interrupted; the identical loop with `run_in_background: true` costs nothing and fires one completion notification the moment it exits. Reserve **Monitor** for one notification *per occurrence* — each CI step, each matching log line. Settling delays under 10s that are not in a loop stay allowed.
+- **Never poll something the harness already tracks.** Subagents and background commands send their own completion notifications; a `date`/`sleep` loop waiting on one is pure waste. Use Monitor only for external state the harness cannot see.
+- **A bounded polling loop is not a completion signal.** `for i in $(seq 1 N); do … break …; sleep 10; done` falls through when its budget runs out, and the line after it prints the same banner either way. What proves the run finished is the process's own exit code — never the loop's.
 
 ## Language - ABSOLUTE RULE
 
@@ -35,7 +40,14 @@
 
 **When the admissible proof is unavailable**, say so explicitly and label the claim `UNVERIFIED — needs <the specific observation>`. An honest gap outranks a plausible inference; never round an unverified claim up to a stated fact.
 
+**Build the observation before you declare it unavailable.** Runtime, data and rendering proofs are usually one throwaway artifact away: a scratch worktree that runs the old and the new code side by side, a stub server returning the payload in question, a synthesized request, a fixture that reproduces the failing state. Reach for `UNVERIFIED` only once that harness is genuinely out of reach — not because the observation would cost a few more tool calls, and never by handing the check back to the user.
+
 **Cached/derived artifacts are stale until dated.** Before citing any log, report, build output, or generated file, check its mtime against the change it supposedly reflects, and confirm the producing process is still running. An old success looks exactly like a fresh one.
+
+## Reporting what you did
+
+- **Enumerate every test file the change touched, and classify each one**: adapted to a new signature, or **assertion changed**. An assertion you inverted is a claim about intended behaviour — state it and justify it, never fold it into a count. "One test needed changing" is a summary; the disclosure is which assertion moved, and why the new one is right.
+- **Volunteer what you deliberately left undone.** On a dirty tree, name the files you did not commit and why; on a partial task, name the part you skipped and what would unblock it. The user should never have to ask twice what is still outstanding.
 
 ## Scope of Changes - ABSOLUTE RULE
 

@@ -1,6 +1,6 @@
 {
   "name": "ncoevoet-workflow",
-  "description": "Marketplace for workflow-kit — an evidence-first Claude Code workflow: verification standards, adversarial spec methodology, model-tier enforcement hooks, CodeGraph MCP.",
+  "description": "Marketplace for workflow-kit — an evidence-first Claude Code workflow: verification standards, adversarial spec methodology, a pre-commit review gate, model-tier and foreground-waiting enforcement hooks, CodeGraph MCP.",
   "owner": {
     "name": "Nicolas Coevoet",
     "email": "nicolas@coevoet.fr"
@@ -9,8 +9,8 @@
     {
       "name": "workflow-kit",
       "source": "./",
-      "version": "0.1.0",
-      "description": "Evidence-first Claude Code workflow: verification standards with claim-class proofs, a 7-phase plan/spec/build methodology with adversarial spec review, subagent model tiers enforced by hooks, and the CodeGraph MCP for structural code queries.",
+      "version": "0.3.0",
+      "description": "Evidence-first Claude Code workflow: verification standards with claim-class proofs, a 7-phase plan/spec/build methodology with adversarial spec review, a pre-commit review gate over everything changed since the last review that also blocks while verification is still running, subagent model tiers and a foreground-waiting guard enforced by hooks, and the CodeGraph MCP for structural code queries.",
       "author": {
         "name": "Nicolas Coevoet",
         "email": "nicolas@coevoet.fr",
@@ -25,7 +25,9 @@
         "methodology",
         "subagents",
         "hooks",
-        "codegraph"
+        "codegraph",
+        "review",
+        "commit-gate"
       ]
     }
   ]
