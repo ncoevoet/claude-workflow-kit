@@ -1,6 +1,6 @@
 # workflow-kit
 
-[![version](https://img.shields.io/badge/version-0.5.0-blue)](.claude-plugin/plugin.json)
+[![version](https://img.shields.io/badge/version-0.5.1-blue)](.claude-plugin/plugin.json)
 
 An evidence-first Claude Code workflow, packaged as a plugin. One install gives you:
 verification standards with a claim-class proof table, a 7-phase plan/spec/build

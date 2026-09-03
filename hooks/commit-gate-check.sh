@@ -5,6 +5,10 @@
 # OPT-IN PER REPOSITORY: exits 0 unless `.claude/.commit-gate/` exists, so installing this
 # plugin never blocks commits in repos that do not use the gate. Enable with:
 #   mkdir -p .claude/.commit-gate
+#
+# The repository checked is the one the commit will RUN in (`cd /elsewhere && git commit`
+# and `git -C /elsewhere commit` are both honoured), not the session cwd — see the
+# resolution block below.
 input=$(cat)
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null)
 cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null)
@@ -17,10 +21,80 @@ case "$cmd" in
 esac
 case "$cmd" in *--dry-run*) exit 0 ;; esac
 
+# --- which repository will this commit actually run in? -------------------------------
+# The payload cwd is where the session's shell sits, which is not necessarily where the
+# commit runs: `cd /other-repo && git commit …` and `git -C /other-repo commit …` both
+# target a different repository. Gating the wrong one is wrong in both directions — it
+# blocks a repo that never opted in, and (worse) it silently skips the gate for a repo
+# that did. So walk the command for the directory in effect when the commit runs.
+#
+# PARSED, NEVER EXECUTED. Anything that would need a shell to resolve (variables, command
+# substitution, globs, brace expansion, `cd -`) is unresolvable — and unresolvable never
+# means "no gate": a wrong block is recoverable, a gate that silently does not run is not.
+
+# first_word <string> — the leading shell word, surrounding quotes stripped.
+first_word() {
+    local s=${1#"${1%%[![:space:]]*}"}
+    case "$s" in
+        '"'*) s=${s#\"}; s=${s%%\"*} ;;
+        "'"*) s=${s#\'}; s=${s%%\'*} ;;
+        *)    s=${s%%[[:space:]]*} ;;
+    esac
+    printf '%s' "$s"
+}
+
+# resolve_dir <base> <token> — the directory <token> selects, relative to <base>; empty
+# when it cannot be known without running a shell. Nothing here is expanded or executed.
+resolve_dir() {
+    case "$2" in
+        ''|-|--)                             return ;;   # needs $HOME / $OLDPWD state
+        *'$'*|*'`'*|*'*'*|*'?'*|*'['*|*'{'*) return ;;   # needs the shell to expand
+        [~]|[~]/*)                           printf '%s' "$HOME${2#?}" ;;  # [~] = literal ~
+        /*)                                  printf '%s' "$2" ;;
+        *) if [ -n "$1" ]; then printf '%s' "$1/$2"; fi ;;   # relative to the base
+    esac
+}
+
+run_dir="$cwd"
+# Split on shell separators so a `cd` counts only when it starts its own segment — a `cd`
+# inside a commit message or a quoted argument is text, not a directory change.
+while IFS= read -r seg; do
+    seg=${seg#"${seg%%[![:space:]({]*}"}            # drop leading blanks and ( { grouping
+    case "$seg" in
+        *"git commit"*|*"git "*" commit"*)
+            # `git -C <path> … commit` moves the commit too, and git applies each -C in
+            # turn, left to right, relative to the previous one. Only the options BEFORE
+            # the subcommand are git's own: `git commit -C <ref>` is --reuse-message and
+            # must never be read as a directory, so cut the segment at ` commit` first.
+            # git itself only accepts `-C <path>` as two words, so that is all we match.
+            rest=${seg%%[[:space:]]commit*}
+            while :; do
+                after=${rest#*[[:space:]]-C[[:space:]]}
+                [ "$after" = "$rest" ] && break
+                cdir=$(resolve_dir "$run_dir" "$(first_word "$after")")
+                # Unresolvable or missing: keep the directory already in effect.
+                if [ -n "$cdir" ] && [ -d "$cdir" ]; then run_dir="$cdir"; fi
+                rest=$after
+            done
+            break ;;                                # the commit runs in run_dir
+        cd|cd[[:space:]]*) ;;
+        *) continue ;;
+    esac
+    # A `cd` we cannot read loses the shell's location entirely, so it clears run_dir and
+    # the payload cwd becomes the anchor again — unlike a -C, which is one option on a
+    # command whose directory we still know.
+    run_dir=$(resolve_dir "$run_dir" "$(first_word "${seg#cd}")")
+done <<<"$(printf '%s' "$cmd" | sed -e 's/&&/\n/g' -e 's/||/\n/g' -e 's/[;|]/\n/g')"
+if [ -n "$run_dir" ]; then
+    run_dir=$(readlink -m "$run_dir" 2>/dev/null)
+    # A path that does not exist is a parse we got wrong: fall back to the payload cwd.
+    if [ -n "$run_dir" ] && [ -d "$run_dir" ]; then cwd="$run_dir"; fi
+fi
+
 [ -n "$cwd" ] || exit 0
 cd "$cwd" 2>/dev/null || exit 0
 
-# Locate the directory that owns .claude/.commit-gate, walking up from cwd.
+# Locate the directory that owns .claude/.commit-gate, walking up from the resolved repo.
 gate_dir=""
 d="$cwd"
 for _ in 1 2 3 4 5 6; do

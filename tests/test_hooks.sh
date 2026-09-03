@@ -114,7 +114,77 @@ repo2=$(mktemp -d)
     echo "## docs" >> README.md; git add README.md
 ) >/dev/null 2>&1
 check "docs-only staged -> allowed"           0 commit-gate-check.sh "{\"tool_input\":{\"command\":\"git commit -m d\"},\"cwd\":\"$repo2\"}"
-rm -rf "$repo" "$repo2" "$RUN_TRACKED_DIR"
+
+# --- the gate follows the repo the commit RUNS in, not the session cwd ----------------
+# `cd /other-repo && git commit` commits somewhere else entirely. Resolving from cwd alone
+# blocks repos that never opted in, and — worse — silently skips the gate when the commit
+# lands in an opt-in repo from a session sitting elsewhere.
+# Fixtures: $repo is opt-in with a stale marker (-> blocked), $plain never opted in (-> allowed),
+# so the exit code alone says which repository the hook resolved.
+plain=$(mktemp -d)
+(
+    cd "$plain" || exit 1
+    git init -q .
+    git config user.email t@t.t; git config user.name t
+    echo x > README.md; git add README.md; git commit -qm init
+    mkdir -p src; echo "const c = 3;" > src/c.ts; git add src/c.ts
+) >/dev/null 2>&1
+
+cg() { # cg <payload-cwd> <command> -> PreToolUse payload
+    printf '{"tool_input":{"command":"%s"},"cwd":"%s"}' "$2" "$1"
+}
+
+check "cd to a non-gated repo -> allowed"     0 commit-gate-check.sh "$(cg "$repo"  "cd $plain && git commit -m x")"
+check "cd to the gated repo -> blocked"       2 commit-gate-check.sh "$(cg "$plain" "cd $repo && git commit -m x")"
+check "semicolon separator honoured"          0 commit-gate-check.sh "$(cg "$repo"  "cd $plain; git commit -m x")"
+check "single-quoted cd path honoured"        0 commit-gate-check.sh "$(cg "$repo"  "cd '$plain' && git commit -m x")"
+check "double-quoted cd path honoured"        2 commit-gate-check.sh "$(cg "$plain" "cd \\\"$repo\\\" && git commit -m x")"
+check "subshell cd honoured"                  0 commit-gate-check.sh "$(cg "$repo"  "(cd $plain && git commit -m x)")"
+check "last cd before the commit wins"        2 commit-gate-check.sh "$(cg "$plain" "cd $plain && cd $repo && git commit -m x")"
+check "cd after the commit is ignored"        2 commit-gate-check.sh "$(cg "$repo"  "git commit -m x && cd $plain")"
+check "cd inside a message is not a cd"       0 commit-gate-check.sh "$(cg "$plain" "git commit -m 'cd $repo now'")"
+check "no cd -> payload cwd (gated)"          2 commit-gate-check.sh "$(cg "$repo"  "git commit -m x")"
+check "no cd -> payload cwd (non-gated)"      0 commit-gate-check.sh "$(cg "$plain" "git commit -m x")"
+
+# Fail safe: anything we cannot resolve without a shell falls back to the payload cwd.
+check "missing cd target -> cwd (gated)"      2 commit-gate-check.sh "$(cg "$repo"  "cd $repo/nope && git commit -m x")"
+check "missing cd target -> cwd (non-gated)"  0 commit-gate-check.sh "$(cg "$plain" "cd $plain/nope && git commit -m x")"
+check "unexpanded variable -> cwd"            2 commit-gate-check.sh "$(cg "$repo"  "cd \$TARGET && git commit -m x")"
+
+# ~ is expanded, against a throwaway HOME so the real one is never touched.
+thome=$(mktemp -d)
+(
+    mkdir -p "$thome/gated" && cd "$thome/gated" || exit 1
+    git init -q .
+    git config user.email t@t.t; git config user.name t
+    echo x > README.md; git add README.md; git commit -qm init
+    mkdir -p .claude/.commit-gate src; echo "const d = 4;" > src/d.ts; git add src/d.ts
+) >/dev/null 2>&1
+HOME=$thome check "tilde cd path expanded"    2 commit-gate-check.sh "$(cg "$plain" "cd ~/gated && git commit -m x")"
+
+# The target is parsed, never executed: a command substitution must not run.
+sentinel="$plain/EXECUTED"
+check "command substitution -> cwd"           2 commit-gate-check.sh "$(cg "$repo" "cd \$(touch $sentinel; echo $plain) && git commit -m x")"
+if [ -e "$sentinel" ]; then
+    fail=$((fail + 1)); echo "  FAIL: the cd target was executed to resolve it"
+else
+    pass=$((pass + 1)); echo "  ok: the cd target is never executed"
+fi
+
+# `git -C <path> … commit` relocates the commit exactly like a cd, so it is the same
+# false-pass hole. git applies each -C in turn, left to right, relative to the previous —
+# and only before the subcommand: `git commit -C <ref>` is --reuse-message, not a path.
+check "git -C to a non-gated repo -> allowed" 0 commit-gate-check.sh "$(cg "$repo"  "git -C $plain commit -m x")"
+check "git -C to the gated repo -> blocked"   2 commit-gate-check.sh "$(cg "$plain" "git -C $repo commit -m x")"
+check "quoted -C path honoured"               2 commit-gate-check.sh "$(cg "$plain" "git -C \\\"$repo\\\" commit -m x")"
+check "-C is relative to the cd in effect"    2 commit-gate-check.sh "$(cg "$plain" "cd $thome && git -C gated commit -m x")"
+check "-C options are cumulative"             2 commit-gate-check.sh "$(cg "$plain" "git -C $thome -C gated commit -m x")"
+check "missing -C target keeps the dir"       2 commit-gate-check.sh "$(cg "$plain" "cd $repo && git -C nope commit -m x")"
+check "unresolvable -C keeps the dir"         2 commit-gate-check.sh "$(cg "$plain" "cd $repo && git -C \$T commit -m x")"
+check "-C after the subcommand is a ref"      2 commit-gate-check.sh "$(cg "$repo"  "git commit -C $plain -m x")"
+check "-C inside a message is not a flag"     0 commit-gate-check.sh "$(cg "$plain" "git commit -m 'reuse -C $repo here'")"
+
+rm -rf "$repo" "$repo2" "$plain" "$thome" "$RUN_TRACKED_DIR"
 
 echo
 echo "== spec-gate-check.sh =="
