@@ -66,11 +66,8 @@ grep -qE 'CRITICAL' "$SKILL" && grep -qE 'IMPORTANT' "$SKILL" \
     || fail "skill no longer states which severities block"
 
 # 7. Every hook referenced by hooks.json exists, is executable, and is documented in the README.
-while read -r name; do
-    [ -n "$name" ] || continue
-    [ -x "$ROOT/hooks/$name" ] || fail "hooks.json references hooks/$name which is missing or not executable"
-    grep -qF "hooks/$name" "$README" || fail "hooks/$name is not documented in README.md"
-done < <(python3 - "$ROOT/hooks/hooks.json" <<'PY'
+# Extracted once so section 12 can check the reverse direction against the same list.
+hooks_json_names=$(python3 - "$ROOT/hooks/hooks.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 for entries in d.get("hooks", {}).values():
@@ -81,6 +78,11 @@ for entries in d.get("hooks", {}).values():
                 print(cmd.split("/hooks/")[-1].strip('"'))
 PY
 )
+while read -r name; do
+    [ -n "$name" ] || continue
+    [ -x "$ROOT/hooks/$name" ] || fail "hooks.json references hooks/$name which is missing or not executable"
+    grep -qF "hooks/$name" "$README" || fail "hooks/$name is not documented in README.md"
+done <<<"$hooks_json_names"
 [ "$rc" -eq 0 ] && ok "hooks.json entries exist and are documented"
 
 # 8. README version badge matches plugin.json.
@@ -153,5 +155,18 @@ done
 grep -qF 'WORKFLOW_SPEC_GATE=off' "$SPEC_HOOK" \
     && ok "block message names the kill switch" \
     || fail "spec-gate block message no longer names WORKFLOW_SPEC_GATE"
+
+echo
+echo "12. every hooks/*.sh file is wired into hooks.json"
+# The reverse of section 7: that direction checks hooks.json -> filesystem (every
+# reference resolves); this checks filesystem -> hooks.json (nothing ships unwired).
+# Reuses the same $hooks_json_names extraction, not a second parser.
+for f in "$ROOT"/hooks/*.sh; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    grep -qxF "$base" <<<"$hooks_json_names" \
+        || fail "hooks/$base exists on disk but is not referenced by hooks.json"
+done
+[ "$rc" -eq 0 ] && ok "every hooks/*.sh file is wired into hooks.json"
 
 exit "$rc"

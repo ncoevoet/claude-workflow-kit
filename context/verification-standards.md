@@ -56,6 +56,7 @@
 
 - **Enumerate every test file the change touched, and classify each one**: adapted to a new signature, or **assertion changed**. An assertion you inverted is a claim about intended behaviour — state it and justify it, never fold it into a count. "One test needed changing" is a summary; the disclosure is which assertion moved, and why the new one is right.
 - **Volunteer what you deliberately left undone.** On a dirty tree, name the files you did not commit and why; on a partial task, name the part you skipped and what would unblock it. The user should never have to ask twice what is still outstanding.
+- **Anything that can pass — or fail — on zero work states the count beside the verdict.** `0 files scanned` and `156 files scanned` must not read the same. A bare `OK`/`PASS` from an instrument that touched nothing is indistinguishable from a clean run — state the N.
 
 ## Scope of Changes - ABSOLUTE RULE
 

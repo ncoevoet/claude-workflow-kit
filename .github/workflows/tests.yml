@@ -1,0 +1,11 @@
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: command -v jq shellcheck python3 bash
+      - run: ./tests/run.sh

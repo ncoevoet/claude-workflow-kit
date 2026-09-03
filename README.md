@@ -1,6 +1,6 @@
 # workflow-kit
 
-[![version](https://img.shields.io/badge/version-0.5.1-blue)](.claude-plugin/plugin.json)
+[![version](https://img.shields.io/badge/version-0.6.0-blue)](.claude-plugin/plugin.json)
 
 An evidence-first Claude Code workflow, packaged as a plugin. One install gives you:
 verification standards with a claim-class proof table, a 7-phase plan/spec/build
@@ -34,6 +34,7 @@ into your `~/.claude`.
 | Commit gate | [`skills/commit-gate-guard`](skills/commit-gate-guard/SKILL.md) + `PreToolUse` on `Bash` → [`hooks/commit-gate-check.sh`](hooks/commit-gate-check.sh) | One small, bounded review pass over everything changed **since the last recorded review** — not just the staged diff — before `git commit`. Blocks on a CRITICAL/IMPORTANT finding, and blocks while a tracked verification run is still alive (`.claude/.commit-gate/inflight/<kind>.pid`, or `bg-watch`'s `run-tracked-<kind>.pid`). **Opt-in per repo**: the hook stays out of the way until you `mkdir -p .claude/.commit-gate` |
 | Spec gate | `PreToolUse` on `ExitPlanMode` and `Edit|Write` → [`hooks/spec-gate-check.sh`](hooks/spec-gate-check.sh) | Refuses plan approval, and the third source file in two hours, until the SPEC phase produced `.claude/specs/<slug>.md` carrying an `## Adversarial review` section — BLOCKER/GAP/NOTE entries, or "none found" plus the six checks run. Structural, not semantic: it proves the artifact exists, not that the adversary was good, so it stops silent skipping rather than deliberate circumvention. **Opt-in per repo**: `mkdir -p .claude/.spec-gate`. Tunable: `WORKFLOW_SPEC_GATE_FREE_FILES` (2), `WORKFLOW_SPEC_GATE_WINDOW_MIN` (120), `WORKFLOW_SPEC_GATE_TTL_MIN` (480), `WORKFLOW_SPEC_GATE=off`. `ExitPlanMode` carries no file path, so it resolves the repo from `cwd` and only fires once the session has already edited a file there — otherwise a plan whose work targets a *different* repo is falsely blocked whenever the shell sits in an opt-in one. The `Edit|Write` half is the load-bearing one |
 | [CodeGraph](https://github.com/colbymchenry/codegraph) MCP | [`.mcp.json`](.mcp.json) declares `npx -y @colbymchenry/codegraph serve --mcp` | Sub-millisecond, AST-accurate "where is X / what calls Y" queries. `npx` fetches the package on first use — nothing to preinstall |
+| Prove | Standalone script — not hook-wired → [`tools/prove.sh`](tools/prove.sh) | Deliberately breaks the file a check watches, confirms the check goes red, restores the file, confirms it goes green again. Answers "a check never observed failing has been run, not verified" ([`context/verification-standards.md`](context/verification-standards.md)) |
 
 CodeGraph needs a per-repository index before it answers: run `codegraph init -i`
 (or `npx -y @colbymchenry/codegraph init -i`) once in each repo you want indexed.

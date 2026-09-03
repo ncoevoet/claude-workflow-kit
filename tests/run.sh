@@ -53,7 +53,7 @@ done
 
 echo
 echo "== shell syntax (bash -n) =="
-for f in "$ROOT"/hooks/*.sh "$ROOT"/tests/*.sh; do
+for f in "$ROOT"/hooks/*.sh "$ROOT"/tests/*.sh "$ROOT"/tools/*.sh; do
   [ -e "$f" ] || continue
   if bash -n "$f"; then echo "  ok: ${f##*/}"; else echo "  SYNTAX ERROR: $f"; rc=1; fi
 done
@@ -61,14 +61,18 @@ done
 echo
 echo "== shellcheck (if available) =="
 if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck "$ROOT"/hooks/*.sh; then echo "  shellcheck clean"; else rc=1; fi
+  if shellcheck "$ROOT"/hooks/*.sh "$ROOT"/tools/*.sh; then echo "  shellcheck clean"; else rc=1; fi
 else
-  echo "  shellcheck not installed — skipped (CI runs it)"
+  echo "  shellcheck not installed locally — 0 files checked here; CI runs it"
 fi
 
 echo
 echo "== hook behaviour =="
 if "$HERE/test_hooks.sh"; then :; else rc=1; fi
+
+echo
+echo "== tools/prove.sh behaviour =="
+bash "$HERE/check-prove.sh" || rc=1
 
 echo
 if [ "$rc" -eq 0 ]; then echo "ALL TESTS PASSED"; else echo "TESTS FAILED"; fi
