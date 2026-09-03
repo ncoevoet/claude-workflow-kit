@@ -4,6 +4,14 @@
 
 - Pin a model on every spawn (hook-enforced by `agent-model-pin.sh`): **haiku** = read-only mechanical (searches, enumeration, log mining) · **sonnet** = mechanical with edits (tests, migrations, formatting) · **opus** = judgment (design, root-cause, security, review verification). Forks inherit the parent model.
 
+## Orchestration — the main session delegates implementation
+
+- **The main session is an orchestrator: it plans, delegates, verifies and integrates. It does not write feature code itself.** Implementation goes to a subagent, pinned to a model per the rule above.
+- Brief each implementation agent with: the exact files it owns, the files it must **not** touch (name the agents running in parallel), the invariants the change must hold, and the commands it must run before reporting. Agents whose file sets overlap are sequenced, never parallel.
+- **Subagents never run `git add`, `git commit`, `git push`, `git stash` or `git checkout`** — the orchestrator owns git state and hands over a clean index.
+- The orchestrator still does the work only it can: building the brief, resolving merge conflicts, judging what came back, running the gates, and recording the change.
+- Exception — implement inline only when delegating costs more than doing: a single-line edit, or a fix already fully diagnosed and expressible as one concrete edit. "It would be faster if I just did it" is not that exception.
+
 ## Waiting — never spend the main thread on it
 
 - **Never block a foreground Bash call on a condition or a deadline** (hook-enforced by `bash-guard.sh`). A foreground `until`/`while` … `sleep` … `done` loop holds the main thread for its whole duration and cannot be interrupted; the identical loop with `run_in_background: true` costs nothing and fires one completion notification the moment it exits. Reserve **Monitor** for one notification *per occurrence* — each CI step, each matching log line. Settling delays under 10s that are not in a loop stay allowed.
