@@ -1,13 +1,14 @@
 # workflow-kit
 
-[![version](https://img.shields.io/badge/version-0.6.0-blue)](.claude-plugin/plugin.json)
+[![version](https://img.shields.io/badge/version-0.7.0-blue)](.claude-plugin/plugin.json)
 
 An evidence-first Claude Code workflow, packaged as a plugin. One install gives you:
 verification standards with a claim-class proof table, a 7-phase plan/spec/build
 methodology with an adversarial spec review, a pre-commit review gate over everything
 changed since the last review that also refuses to commit while verification is still
 running, subagent model tiers enforced by hooks, a guard against burning the main thread
-on foreground waiting, and the
+on foreground waiting, a compaction gate that holds auto-compaction until the session has
+checkpointed, and the
 [CodeGraph](https://github.com/colbymchenry/codegraph) MCP for structural code
 queries. Extracted from a working setup after a deep transcript audit tuned each
 piece against measured waste.
@@ -33,6 +34,7 @@ into your `~/.claude`.
 | Bash guard | `PreToolUse` on `Bash` → [`hooks/bash-guard.sh`](hooks/bash-guard.sh) | Blocks `cd <current-dir> && …` prefixes (cwd persists between calls), bare symbol-greps in CodeGraph-indexed repos, and **foreground waiting** — an `until`/`while` poll loop or a `sleep` of 10s or more on the main thread. The message names the fix: the same command with `run_in_background: true` for one completion notification, or `Monitor` for one per occurrence. Literal-text searches, background runs and short settling delays stay allowed |
 | Commit gate | [`skills/commit-gate-guard`](skills/commit-gate-guard/SKILL.md) + `PreToolUse` on `Bash` → [`hooks/commit-gate-check.sh`](hooks/commit-gate-check.sh) | One small, bounded review pass over everything changed **since the last recorded review** — not just the staged diff — before `git commit`. Blocks on a CRITICAL/IMPORTANT finding, and blocks while a tracked verification run is still alive (`.claude/.commit-gate/inflight/<kind>.pid`, or `bg-watch`'s `run-tracked-<kind>.pid`). **Opt-in per repo**: the hook stays out of the way until you `mkdir -p .claude/.commit-gate` |
 | Spec gate | `PreToolUse` on `ExitPlanMode` and `Edit|Write` → [`hooks/spec-gate-check.sh`](hooks/spec-gate-check.sh) | Refuses plan approval, and the third source file in two hours, until the SPEC phase produced `.claude/specs/<slug>.md` carrying an `## Adversarial review` section — BLOCKER/GAP/NOTE entries, or "none found" plus the six checks run. Structural, not semantic: it proves the artifact exists, not that the adversary was good, so it stops silent skipping rather than deliberate circumvention. **Opt-in per repo**: `mkdir -p .claude/.spec-gate`. Tunable: `WORKFLOW_SPEC_GATE_FREE_FILES` (2), `WORKFLOW_SPEC_GATE_WINDOW_MIN` (120), `WORKFLOW_SPEC_GATE_TTL_MIN` (480), `WORKFLOW_SPEC_GATE=off`. `ExitPlanMode` carries no file path, so it resolves the repo from `cwd` and only fires once the session has already edited a file there — otherwise a plan whose work targets a *different* repo is falsely blocked whenever the shell sits in an opt-in one. The `Edit|Write` half is the load-bearing one |
+| Compact gate | `PreCompact` matcher `auto` → [`hooks/compact-gate-check.sh`](hooks/compact-gate-check.sh), plus `SessionStart` → [`hooks/compact-resume.sh`](hooks/compact-resume.sh) | Blocks **automatic** compaction until the session has written a checkpoint, so the context is cut on a task boundary with durable state on disk rather than mid-edit. `/compact` typed by a human is never blocked. State is one file per session (`.claude/.compact-gate/sessions/<session_id>.md`), so several sessions can share a working directory without racing; `session_id` survives compaction unchanged. The `SessionStart` hook tells each session its own path, and on the `source=compact` start that follows a compaction replays the checkpoint, the active spec pointer and `git status`. Freshness is an mtime comparison, so a stale checkpoint never opens the gate twice. Blocking only *defers* compaction, so the release valve is what keeps it safe: primarily a hard token ceiling read from the transcript (`WORKFLOW_COMPACT_GATE_MAX_TOKENS`, 350000), with a consecutive-block count (`WORKFLOW_COMPACT_GATE_MAX_BLOCKS`, 8) and a deferral timeout (`WORKFLOW_COMPACT_GATE_MAX_DEFER_MIN`, 20) as backstops for when the transcript cannot be read. **Opt-in per repo**: `mkdir -p .claude/.compact-gate`. `WORKFLOW_COMPACT_GATE=off` disables it. Pair it with `CLAUDE_CODE_AUTO_COMPACT_WINDOW=250000`: a fixed 33k "autocompact buffer" sits inside that window, so the harness starts asking to compact around 217k and the gate holds the line up to the 350k ceiling |
 | [CodeGraph](https://github.com/colbymchenry/codegraph) MCP | [`.mcp.json`](.mcp.json) declares `npx -y @colbymchenry/codegraph serve --mcp` | Sub-millisecond, AST-accurate "where is X / what calls Y" queries. `npx` fetches the package on first use — nothing to preinstall |
 | Prove | Standalone script — not hook-wired → [`tools/prove.sh`](tools/prove.sh) | Deliberately breaks the file a check watches, confirms the check goes red, restores the file, confirms it goes green again. Answers "a check never observed failing has been run, not verified" ([`context/verification-standards.md`](context/verification-standards.md)) |
 
@@ -41,9 +43,9 @@ CodeGraph needs a per-repository index before it answers: run `codegraph init -i
 The bash-guard grep rule only activates where a `.codegraph/` directory exists, so
 un-indexed repos behave exactly as before.
 
-**Context cost, stated honestly:** the two injected documents are ~15 KB per session.
+**Context cost, stated honestly:** the two injected documents are ~22 KB per session.
 That is the same price a CLAUDE.md of that size would pay — the workflow considers it
-the highest-yield 15 KB in the budget, but it is not free.
+the highest-yield 22 KB in the budget, but it is not free.
 
 ## Companion plugins (optional, same author)
 
@@ -74,6 +76,13 @@ the highest-yield 15 KB in the budget, but it is not free.
    [`hooks/hooks.json`](hooks/hooks.json) in your fork.
 3. **The guard hooks require `jq`** (present on most dev machines). Without it they
    fail open — nothing breaks, nothing is enforced.
+4. **The compact gate needs one setting outside the plugin.** Arming it is
+   `mkdir -p .claude/.compact-gate`, but the window it defends is the harness's, so set
+   `CLAUDE_CODE_AUTO_COMPACT_WINDOW=250000` (verified: `/context` then reports a `250k`
+   window instead of the model's full `1m`; values below 100k are clamped up to 100k).
+   That pairs with the gate's own 350k token ceiling — the harness starts asking to compact
+   around 217k, and the gate holds the line for the 133k in between. On a smaller context
+   window, scale both down together and keep the gap wide enough for several turns.
 
 ## Why these rules
 
@@ -94,9 +103,20 @@ Each rule answers a failure that actually happened, not a preference:
   reached the merge request with typecheck, lint, browser check and the full suite green, the specs
   having been written in the same pass under the same wrong assumption. A review only ever sees the
   code as it was when it ran; the gate closes the window after it.
-- **Spec gate** — SPEC and its adversarial review were the only phases in this methodology with no
-  enforcement behind them, and they were the ones that got skipped. Every rule with a hook was
-  followed, including when it blocked and forced another approach. Prose lost; hooks won.
+- **Compact gate** — auto-compaction fires on the harness's clock, not on a task boundary, so it
+  lands mid-edit and takes the working state that lived only in reasoning with it. Measured on
+  Claude Code 2.1.263: an identical eight-file read task with the auto-compact window at 100k
+  *failed* when compaction was allowed — "Autocompact is thrashing: the context refilled to the
+  limit within 3 turns of the previous compact, 3 times in a row" — and *completed* when the gate
+  blocked the same seven attempts. Blocking past the configured window is safe: that window is
+  Claude Code's own accounting, not the model's hard ceiling, and a session measured at 159k
+  tokens kept running normally against a configured window of 100k.
+- **Why the gate enforces the ceiling instead of asking** — a `PreCompact` hook has no channel to
+  the model. A blocking hook whose stderr instructed the model to emit a specific token produced
+  no such token, and neither did one returning `hookSpecificOutput.additionalContext`. The block
+  message is therefore written for the human watching the session; the model learns the checkpoint
+  rule from injected context, and the release valve reads the real token count out of the
+  transcript rather than trusting anyone to stop in time.
 
 ## Tests
 

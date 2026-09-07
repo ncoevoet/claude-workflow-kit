@@ -110,6 +110,36 @@ it reported. Reports are evidence, not proof.
 - One pass is not enough on a large diff, and the review's own findings need the same
   scepticism as any other agent's.
 
+## Compaction — checkpoint before the context is cut
+
+Auto-compaction fires on the harness's clock, not on a task boundary. Left alone it lands
+mid-edit and takes with it every piece of working state that lived only in reasoning.
+
+In a repository with a `.claude/.compact-gate/` directory the gate inverts that: automatic
+compaction is **blocked** until this session has written a checkpoint. The `SessionStart`
+hook prints the absolute path to write to — one file per session, so several sessions can
+share a working directory without racing each other.
+
+- **Write the checkpoint when the work is durable** — the spec is on disk, edits are saved,
+  sub-agent results are integrated, and nothing that matters exists only in your reasoning.
+  Not on a fixed interval, and never in the middle of a multi-file edit.
+- **Then make one more small tool call.** `PreCompact` only runs when the harness next
+  attempts compaction, which is on the following request. A session that checkpoints and
+  then goes quiet is never compacted at all.
+- **Contents**: the current phase, what is already durable, the exact next action, and any
+  files in flight. Write it for a reader who has lost the conversation, because that is
+  exactly who reads it — the same file is injected back on the `SessionStart` that follows
+  the compaction.
+- **Rewrite it every time.** The gate compares its mtime against the last compaction it let
+  through, so a stale checkpoint never opens the gate twice.
+
+Why block rather than simply tune the window down: measured on Claude Code 2.1.263, one
+identical eight-file read task with the auto-compact window at 100k **failed** when
+compaction was allowed — `Autocompact is thrashing: the context refilled to the limit
+within 3 turns of the previous compact, 3 times in a row` — and **completed** when the gate
+blocked the same seven compaction attempts. Compacting on a boundary you chose is cheaper
+than compacting on one the harness has to keep retrying.
+
 ## SPEC phase — sub-agent prompt and template
 
 The sub-agent writes ONE file: the SPEC-phase target spec file (`.claude/specs/<slug>.md`). It builds no source.

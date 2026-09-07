@@ -23,6 +23,21 @@ check() {
     fi
 }
 
+# check_env <name> <expected-exit> <hook> <json> <VAR=VAL>... — as check, but with the
+# named variables set for the hook process only, so a kill switch or a tuning knob can be
+# exercised without leaking into the rest of the run.
+check_env() {
+    local name="$1" want="$2" hook="$3" json="$4" got
+    shift 4
+    printf '%s' "$json" | env "$@" "$HOOKS/$hook" >/dev/null 2>&1
+    got=$?
+    if [ "$got" = "$want" ]; then
+        pass=$((pass + 1)); echo "  ok: $name"
+    else
+        fail=$((fail + 1)); echo "  FAIL: $name (want exit $want, got $got)"
+    fi
+}
+
 echo "== agent-model-pin.sh =="
 check "spawn without model is blocked"        2 agent-model-pin.sh '{"tool_input":{"subagent_type":"general-purpose"}}'
 check "spawn with model is allowed"           0 agent-model-pin.sh '{"tool_input":{"subagent_type":"general-purpose","model":"opus"}}'
@@ -277,6 +292,133 @@ rm -f "$sg/.claude/.spec-gate/touched"
 
 unset WORKFLOW_SPEC_GATE_FREE_FILES
 rm -rf "$sg" "$other"
+
+echo
+echo "== compact-gate-check.sh =="
+# PreCompact contract: exit 0 = the compaction proceeds, 2 = it is deferred with the reason
+# on stderr. Same opt-in shape as the other gates, keyed on .claude/.compact-gate/.
+cgt=$(mktemp -d)
+CGATE="$cgt/.claude/.compact-gate"
+
+pc() { # pc <trigger> <session-id> -> PreCompact payload
+    printf '{"session_id":"%s","trigger":"%s","cwd":"%s"}' "$2" "$1" "$cgt"
+}
+
+check "manual compaction is never gated"      0 compact-gate-check.sh "$(pc manual s1)"
+check "auto, no opt-in dir -> allowed"        0 compact-gate-check.sh "$(pc auto s1)"
+
+mkdir -p "$CGATE"
+check "opt-in, no checkpoint -> blocked"      2 compact-gate-check.sh "$(pc auto s1)"
+
+# Freshness is mtime(checkpoint) > consumed_at, so the fixture is stamped explicitly into the
+# future: writing it and re-running the hook can otherwise land in the same clock second, which
+# ties rather than wins.
+mkdir -p "$CGATE/sessions"
+printf 'phase: implement\nnext: run the tests\n' > "$CGATE/sessions/s1.md"
+touch -d '+1 hour' "$CGATE/sessions/s1.md"
+check "fresh checkpoint -> allowed"           0 compact-gate-check.sh "$(pc auto s1)"
+check "same checkpoint again -> blocked"      2 compact-gate-check.sh "$(pc auto s1)"
+touch -d '+2 hours' "$CGATE/sessions/s1.md"
+check "rewritten checkpoint -> allowed"       0 compact-gate-check.sh "$(pc auto s1)"
+
+# Consuming a checkpoint must not remove it — compact-resume.sh replays the same file after
+# the gate has passed on it.
+if [ -f "$CGATE/sessions/s1.md" ]; then
+    pass=$((pass + 1)); echo "  ok: the consumed checkpoint is left on disk"
+else
+    fail=$((fail + 1)); echo "  FAIL: the gate deleted the checkpoint it consumed"
+fi
+
+check_env "kill switch -> allowed"            0 compact-gate-check.sh "$(pc auto s2)" WORKFLOW_COMPACT_GATE=off
+
+# The session id is interpolated into a path, so a traversing one must be rejected before any
+# mkdir or stat runs — not merely fail to match an existing file.
+before=$(find "$cgt" | sort)
+check "traversing session id -> allowed"      0 compact-gate-check.sh "$(pc auto '../../escape')"
+if [ "$(find "$cgt" | sort)" = "$before" ]; then
+    pass=$((pass + 1)); echo "  ok: a traversing session id creates nothing"
+else
+    fail=$((fail + 1)); echo "  FAIL: a traversing session id wrote outside the gate directory"
+fi
+
+check "empty session id -> allowed"           0 compact-gate-check.sh "$(pc auto '')"
+check "missing session id -> allowed"         0 compact-gate-check.sh "{\"trigger\":\"auto\",\"cwd\":\"$cgt\"}"
+
+# Release valve: deferring for ever is worse than compacting without a checkpoint, so the gate
+# gives up after MAX_BLOCKS consecutive blocks — and resets its counter when it does.
+check_env "1st block under a valve of 1"      2 compact-gate-check.sh "$(pc auto s3)" WORKFLOW_COMPACT_GATE_MAX_BLOCKS=1
+check_env "2nd attempt releases the valve"    0 compact-gate-check.sh "$(pc auto s3)" WORKFLOW_COMPACT_GATE_MAX_BLOCKS=1
+check_env "counter reset -> blocks again"     2 compact-gate-check.sh "$(pc auto s3)" WORKFLOW_COMPACT_GATE_MAX_BLOCKS=1
+
+# Token ceiling — the primary release valve. The PreCompact payload carries no token count,
+# so the live context size is read from the tail of the transcript: the last assistant turn's
+# usage, input + cache_read + cache_creation.
+tx="$cgt/transcript.jsonl"
+usage() { # usage <input> <cache-read> <cache-creation> -> one assistant transcript line
+    printf '{"type":"assistant","message":{"usage":{"input_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}}}\n' "$1" "$2" "$3"
+}
+pct() { # pct <session-id> <transcript-path> -> PreCompact payload carrying a transcript
+    printf '{"session_id":"%s","trigger":"auto","cwd":"%s","transcript_path":"%s"}' "$1" "$cgt" "$2"
+}
+
+{ printf '{"type":"user","message":{"content":"hi"}}\n'; usage 2 100 50; usage 2 900 200; } > "$tx"
+check_env "context over the ceiling -> allowed"   0 compact-gate-check.sh "$(pct t1 "$tx")" WORKFLOW_COMPACT_GATE_MAX_TOKENS=1000
+check_env "context under the ceiling -> blocked"  2 compact-gate-check.sh "$(pct t2 "$tx")" WORKFLOW_COMPACT_GATE_MAX_TOKENS=100000
+check_env "ceiling of 0 disables the valve"       2 compact-gate-check.sh "$(pct t3 "$tx")" WORKFLOW_COMPACT_GATE_MAX_TOKENS=0
+
+# The LAST usage is the live size; an earlier, larger one is a compacted-away past. Reading the
+# max — or the first — would release a session that has just been compacted back down.
+{ usage 2 900 200; usage 2 100 50; } > "$cgt/shrunk.jsonl"
+check_env "an earlier larger usage is ignored"    2 compact-gate-check.sh "$(pct t4 "$cgt/shrunk.jsonl")" WORKFLOW_COMPACT_GATE_MAX_TOKENS=1000
+
+# An unreadable or unparseable transcript leaves the size unknown, which must fall through to
+# the counter valves and block — never release, and never crash.
+check_env "missing transcript -> blocked"         2 compact-gate-check.sh "$(pct t5 "$cgt/nope.jsonl")" WORKFLOW_COMPACT_GATE_MAX_TOKENS=1
+printf 'not json at all\n{"type":"assistant","message":\n' > "$cgt/bad.jsonl"
+check_env "malformed transcript -> blocked"       2 compact-gate-check.sh "$(pct t6 "$cgt/bad.jsonl")" WORKFLOW_COMPACT_GATE_MAX_TOKENS=1
+
+# A readable size under the ceiling outranks the counter valves. They are proxies for "the
+# context is getting dangerous"; letting a proxy overrule the direct measurement would release
+# a few blocks past the trigger point every time, leaving the ceiling permanently unreachable.
+check_env "readable size, 1st block"              2 compact-gate-check.sh "$(pct t7 "$tx")" WORKFLOW_COMPACT_GATE_MAX_BLOCKS=1 WORKFLOW_COMPACT_GATE_MAX_TOKENS=100000
+check_env "block count cannot beat the ceiling"   2 compact-gate-check.sh "$(pct t7 "$tx")" WORKFLOW_COMPACT_GATE_MAX_BLOCKS=1 WORKFLOW_COMPACT_GATE_MAX_TOKENS=100000
+check_env "elapsed time cannot beat it either"    2 compact-gate-check.sh "$(pct t7 "$tx")" WORKFLOW_COMPACT_GATE_MAX_DEFER_MIN=0 WORKFLOW_COMPACT_GATE_MAX_TOKENS=100000
+# ... but with the size unreadable, the same counters must still release.
+check_env "unreadable size, counter still fires"  0 compact-gate-check.sh "$(pct t7 "$cgt/nope.jsonl")" WORKFLOW_COMPACT_GATE_MAX_BLOCKS=1 WORKFLOW_COMPACT_GATE_MAX_TOKENS=100000
+
+echo
+echo "== compact-resume.sh =="
+# SessionStart contract: always exit 0, stdout is injected into the session context.
+rsm=$(mktemp -d)
+resume() { # resume <session-id> <source> -> SessionStart payload
+    printf '{"session_id":"%s","source":"%s","cwd":"%s"}' "$1" "$2" "$rsm"
+}
+
+check "not armed -> exits 0"                  0 compact-resume.sh "$(resume s1 startup)"
+if [ -z "$(resume s1 startup | "$HOOKS/compact-resume.sh" 2>/dev/null)" ]; then
+    pass=$((pass + 1)); echo "  ok: not armed -> prints nothing"
+else
+    fail=$((fail + 1)); echo "  FAIL: printed context in a repo that never opted in"
+fi
+
+mkdir -p "$rsm/.claude/.compact-gate/sessions"
+check "armed -> exits 0"                      0 compact-resume.sh "$(resume s1 startup)"
+# The model cannot derive its own session id, so this line is the only way it learns which
+# file the gate is waiting for.
+if resume s1 startup | "$HOOKS/compact-resume.sh" 2>/dev/null | grep -qF "$rsm/.claude/.compact-gate/sessions/s1.md"; then
+    pass=$((pass + 1)); echo "  ok: armed -> prints this session's checkpoint path"
+else
+    fail=$((fail + 1)); echo "  FAIL: armed but the checkpoint path was not printed"
+fi
+
+printf 'phase: implement\nnext: run the tests\n' > "$rsm/.claude/.compact-gate/sessions/s1.md"
+if resume s1 compact | "$HOOKS/compact-resume.sh" 2>/dev/null | grep -qF 'next: run the tests'; then
+    pass=$((pass + 1)); echo "  ok: source=compact replays the checkpoint body"
+else
+    fail=$((fail + 1)); echo "  FAIL: source=compact did not replay the checkpoint"
+fi
+
+rm -rf "$cgt" "$rsm"
 
 echo
 echo "hooks: $pass passed, $fail failed"
