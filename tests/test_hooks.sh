@@ -118,6 +118,33 @@ rm -rf "$repo/.claude/.commit-gate/inflight"
 ( cd "$repo" && echo "const b = 2;" >> src/a.ts && git add src/a.ts )
 check "stale marker -> blocked"               2 commit-gate-check.sh "$J"
 
+# Monorepo: the gate directory is anchored on the repository ROOT, so a nested one left in a
+# sub-project cannot shadow it. Both halves of the gate must resolve the same directory —
+# the skill writes the marker at the root and the hook has to read it there no matter which
+# directory the commit runs from. Before this was anchored, a commit run from the sub-project
+# read the nested marker: `last-pass` over-blocked, and a nested `last-review` would have
+# silently shrunk the next delta review.
+mono=$(mktemp -d)
+(
+    cd "$mono" || exit 1
+    git init -q .
+    git config user.email t@t.t; git config user.name t
+    echo initial > README.md; git add README.md; git commit -qm init
+    mkdir -p apps/ng/src; echo "const a = 1;" > apps/ng/src/a.ts; git add apps/ng/src/a.ts
+    mkdir -p .claude/.commit-gate apps/ng/.claude/.commit-gate
+    git diff --cached | sha256sum | cut -d' ' -f1 > .claude/.commit-gate/last-pass
+    echo "0000000000000000000000000000000000000000000000000000000000000000" \
+        > apps/ng/.claude/.commit-gate/last-pass
+) >/dev/null 2>&1
+check "root marker wins from the repo root" 0 commit-gate-check.sh \
+    "{\"tool_input\":{\"command\":\"git commit -m x\"},\"cwd\":\"$mono\"}"
+check "root marker wins from a sub-project" 0 commit-gate-check.sh \
+    "{\"tool_input\":{\"command\":\"git commit -m x\"},\"cwd\":\"$mono/apps/ng\"}"
+# And the root marker still has to be right — the anchoring must not turn into "always allow".
+echo bad > "$mono/.claude/.commit-gate/last-pass"
+check "wrong root marker still blocks from a sub-project" 2 commit-gate-check.sh \
+    "{\"tool_input\":{\"command\":\"git commit -m x\"},\"cwd\":\"$mono/apps/ng\"}"
+
 # Docs-only staged diff is never gated, even with a stale marker present.
 repo2=$(mktemp -d)
 (

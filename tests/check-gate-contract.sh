@@ -42,6 +42,16 @@ in_files "hook reads the last-pass marker" "last-pass" "$HOOK"
 # 2. The opt-in directory is the same string in all three places.
 in_files "opt-in dir agrees" ".claude/.commit-gate" "$SKILL" "$HOOK" "$README"
 
+# 2b. Writer and reader must anchor the gate directory on the SAME root. The skill writing the
+#     marker cwd-relative while the hook walks up from the commit's run directory is the exact
+#     drift that produced a nested second gate dir in a monorepo: `last-pass` over-blocked, and
+#     a stale nested `last-review` would have shrunk the next delta review.
+in_files "skill anchors the marker on the repo root" 'git rev-parse --show-toplevel' "$SKILL"
+in_files "hook anchors the gate dir on the repo root" 'git rev-parse --show-toplevel' "$HOOK"
+grep -q 'mkdir -p \.claude/\.commit-gate' "$SKILL" \
+    && fail "skill still writes the gate dir cwd-relative — anchor it on \$(git rev-parse --show-toplevel)" \
+    || ok "skill has no cwd-relative gate dir write"
+
 # 3. The hook must stay opt-in — a regression here blocks commits in every repo
 #    that merely installs the plugin.
 grep -q 'exits 0 unless' "$SKILL" || fail "skill no longer documents the opt-in behaviour"

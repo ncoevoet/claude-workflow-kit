@@ -4,7 +4,9 @@
 #
 # OPT-IN PER REPOSITORY: exits 0 unless `.claude/.commit-gate/` exists, so installing this
 # plugin never blocks commits in repos that do not use the gate. Enable with:
-#   mkdir -p .claude/.commit-gate
+#   mkdir -p "$(git rev-parse --show-toplevel)/.claude/.commit-gate"
+# One gate directory per repository, at its root — the skill writes the marker there and this
+# hook reads it there. A second, nested one is never read and silently shrinks the next delta.
 #
 # The repository checked is the one the commit will RUN in (`cd /elsewhere && git commit`
 # and `git -C /elsewhere commit` are both honoured), not the session cwd — see the
@@ -94,14 +96,30 @@ fi
 [ -n "$cwd" ] || exit 0
 cd "$cwd" 2>/dev/null || exit 0
 
-# Locate the directory that owns .claude/.commit-gate, walking up from the resolved repo.
+# Locate the directory that owns .claude/.commit-gate.
+#
+# The repository root comes FIRST, and deliberately so: the skill writes the marker there, and
+# the reader has to land on the same directory or the gate blocks a commit it already passed.
+# Anchoring both ends on `git rev-parse --show-toplevel` makes that agreement independent of
+# where either half happened to run — in a monorepo the gate is typically invoked from a
+# sub-project (apps/ng) while the commit runs from the root, and a walk-up from each lands on a
+# different `.claude/.commit-gate` whenever a nested one exists. `last-pass` only ever
+# over-blocks that way, but a nested `last-review` silently SHRINKS the next delta review.
+#
+# The walk-up is kept as the fallback for the layout the git root cannot express: `.claude/`
+# owned by a workspace root ABOVE the repository, or a commit run outside any git repo.
 gate_dir=""
-d="$cwd"
-for _ in 1 2 3 4 5 6; do
-    if [ -d "$d/.claude/.commit-gate" ]; then gate_dir="$d/.claude/.commit-gate"; break; fi
-    [ "$d" = "/" ] && break
-    d=$(dirname "$d")
-done
+root=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$root" ] && [ -d "$root/.claude/.commit-gate" ]; then
+    gate_dir="$root/.claude/.commit-gate"
+else
+    d="$cwd"
+    for _ in 1 2 3 4 5 6; do
+        if [ -d "$d/.claude/.commit-gate" ]; then gate_dir="$d/.claude/.commit-gate"; break; fi
+        [ "$d" = "/" ] && break
+        d=$(dirname "$d")
+    done
+fi
 # Not enabled in this repo — stay out of the way.
 [ -n "$gate_dir" ] || exit 0
 

@@ -91,14 +91,26 @@ migration), run them now. A project skill of the same name overrides this one �
 
 ### 5. Verdict and marker
 
-On PASS, write both markers (paths relative to the repo or workspace root that owns
-`.claude/`):
+On PASS, write both markers. Anchor them on the **repository root**, never on the current
+directory — the hook resolves the same root, and the two halves must land on the same
+directory or the gate blocks a commit it already passed:
 
 ```sh
-mkdir -p .claude/.commit-gate
-git diff --cached | sha256sum | cut -d' ' -f1 > .claude/.commit-gate/last-pass
-git rev-parse HEAD                                > .claude/.commit-gate/last-review
+GATE="$(git rev-parse --show-toplevel)/.claude/.commit-gate"
+mkdir -p "$GATE"
+git diff --cached | sha256sum | cut -d' ' -f1 > "$GATE/last-pass"
+git rev-parse HEAD                            > "$GATE/last-review"
 ```
+
+> Writing these cwd-relative is the one mistake that breaks the gate quietly. In a monorepo the
+> gate usually runs from a sub-project while the commit runs from the root, so `mkdir -p
+> .claude/.commit-gate` creates a *second* gate directory the hook never reads. `last-pass` only
+> over-blocks that way — the sha cannot collide — but a stale nested `last-review` silently
+> **shrinks** the next delta review, which is the failure the gate exists to prevent. One gate
+> directory per repository, at its root.
+
+That is `<repo-root>/.claude/.commit-gate/last-pass` and
+`<repo-root>/.claude/.commit-gate/last-review` — the two paths the hook reads.
 
 `last-pass` is what the PreToolUse hook compares against the staged diff. `last-review` is the
 baseline for the *next* run — write it only on PASS, so a blocked commit does not silently
@@ -135,13 +147,14 @@ A project skill should state that it runs this review step too, rather than sile
 
 `hooks/commit-gate-check.sh` blocks `git commit` when the staged diff does not match
 `last-pass`, **or while a tracked verification run is still alive**. It is **opt-in**: it
-exits 0 unless `.claude/.commit-gate/` exists in the repository, so installing the plugin
-never blocks commits in repos that do not use the gate.
+exits 0 unless `.claude/.commit-gate/` exists at the repository root (or, as a fallback, at a
+workspace root above it), so installing the plugin never blocks commits in repos that do not use
+the gate.
 
-Enable it in a repo with:
+Enable it in a repo with (from anywhere inside the working tree):
 
 ```sh
-mkdir -p .claude/.commit-gate
+mkdir -p "$(git rev-parse --show-toplevel)/.claude/.commit-gate"
 ```
 
 ### In-flight verification
