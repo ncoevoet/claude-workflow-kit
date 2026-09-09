@@ -39,14 +39,14 @@ phases in order before and during the change. Skip the whole flow for trivial ed
 
 ### 4. SPEC
 
-- Spawn a **dedicated sub-agent** (Agent/Task tool) to write the implementation spec. The main thread does not write it.
+- Spawn a **dedicated sub-agent** (Agent/Task tool), a Researcher-class spawn (sonnet), to write the implementation spec. The main thread does not write it.
 - This holds **even when the main thread just did the exploration itself** and feels faster writing it. Skipping it is the common failure: the spec then lives only in the main thread's context, where it is never re-read, and the plan file becomes a running narrative instead of a checkable artifact. Hand the sub-agent your exploration findings; that is what the prompt below is for.
 - Target file: `.claude/specs/<slug>.md` in the current repo. Slug = task lowercased, non-alphanumerics → `-`, trimmed, deduped; append `-2`, `-3` if a file already exists.
 - The sub-agent writes ONLY that one file and builds NO source.
 - Per step the spec records: description · key decision · chosen default · verify method · affected files.
 - Hand the sub-agent the prompt and skeleton in the section below.
 - **Adversarial spec review (before GATE).** Spawn a SECOND, independent sub-agent (opus —
-  judgment tier) that has NOT seen the exploration or the spec-writer's context: it gets only
+  the Refuter role) that has NOT seen the exploration or the spec-writer's context: it gets only
   the original task, the locked interview decisions, and the spec file path, with read access
   to the tree. Its charter is to prove the spec incomplete — requirements no step covers,
   affected files the steps omit (check callers/consumers of everything touched), `verify:`
@@ -78,9 +78,8 @@ phases in order before and during the change. Skip the whole flow for trivial ed
   subagent (test-specialist / bug-detective) with an exclusive file list; never attempt edit #4
   on the main thread.
 - **Delegation threshold:** an investigation expected to exceed ~30 tool calls or read >10 files
-  runs in a subagent (model pinned per the tier rule: haiku read-only / sonnet edits / opus
-  judgment) that returns the diagnosis only; the main thread keeps the plan and the integrated
-  view.
+  runs in a subagent (model pinned per the role table in verification-standards.md) that
+  returns the diagnosis only; the main thread keeps the plan and the integrated view.
 
 **Fanning out to parallel agents.** Each agent gets an exclusive file list, and is told
 which neighbouring files a sibling is holding. Also tell it:
@@ -101,7 +100,8 @@ it reported. Reports are evidence, not proof.
 ### 7. REVIEW
 
 - For any multi-file or multi-agent change, run an **independent review of the integrated
-  diff** before shipping. Fix CRITICAL/IMPORTANT findings, then re-run every gate.
+  diff** before shipping. Fix CRITICAL/IMPORTANT findings, then re-run every gate. The
+  reviewer re-runs the gates itself, rather than reading the builder's report of them.
 - Per-step `verify:` checks prove each step did what it said. They cannot see a contract
   that two steps agreed on wrongly, or a safety promise a docstring makes and the code
   breaks. A change once passed every gate — full suites, lint, typecheck — while
@@ -154,7 +154,7 @@ The sub-agent writes ONE file: the SPEC-phase target spec file (`.claude/specs/<
 > Be surgical (§3): no speculative scope, no abstractions for single-use code.
 > Return the spec as your final message after writing the file.
 
-### Adversarial reviewer prompt (use verbatim; fill `<task>`, `<spec-file>`, `<decisions>`; model: opus)
+### Adversarial reviewer prompt (use verbatim; fill `<task>`, `<spec-file>`, `<decisions>`; model: opus — the Refuter role)
 
 > You are an adversarial spec reviewer. Read `<spec-file>` for the task "`<task>`" with locked
 > decisions `<decisions>`. You did not write it; assume it is incomplete until proven otherwise.

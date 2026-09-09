@@ -58,8 +58,10 @@ this reliable.
 Skip **only** when the delta touches no code (docs, `*.md`, `.claude/`, config-only). Say
 `review: N/A (no code in delta)` and go to the marker.
 
-Spawn **ONE** `general-purpose` agent with an explicit `model: opus` — one pass, no verifier
-fan-out, no multi-axis spawn. That is what keeps this cheap enough to run on every commit.
+Spawn **ONE** `general-purpose` agent with an explicit `model: opus` (the Refuter role, scoped
+to the diff — the gate's own in-flight-verification step below already covers the test run) —
+one pass, no verifier fan-out, no multi-axis spawn. That is what keeps this cheap enough to
+run on every commit.
 
 Give it:
 - If the **review-all** companion plugin is installed, its bugs persona plus shared rules:

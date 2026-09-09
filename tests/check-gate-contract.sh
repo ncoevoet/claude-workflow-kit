@@ -179,4 +179,34 @@ for f in "$ROOT"/hooks/*.sh; do
 done
 [ "$rc" -eq 0 ] && ok "every hooks/*.sh file is wired into hooks.json"
 
+echo
+echo "13. agent-model-pin.sh <-> verification-standards.md <-> README"
+PIN_HOOK="$ROOT/hooks/agent-model-pin.sh"
+
+for role in Scout Researcher Builder Refuter Debugger; do
+    in_files "role '$role' documented" "$role" "$PIN_HOOK" "$STANDARDS"
+done
+in_files "fable named in the hook, README and standards" "fable" "$PIN_HOOK" "$README" "$STANDARDS"
+
+grep -qF 'read-only mechanical' "$README" \
+    && fail "retired 'read-only mechanical' wording still present in README.md" \
+    || ok "retired 'read-only mechanical' wording is gone from README.md"
+
+# Derived from what inject-context.sh actually injects (by name), not a context/*.md glob —
+# a third context doc could sit in the glob's byte count while never reaching a session.
+INJECT_HOOK="$ROOT/hooks/inject-context.sh"
+inject_files=()
+while IFS= read -r rel; do
+    inject_files+=("$ROOT/$rel")
+done < <(grep -oE 'context/[A-Za-z0-9_.-]+\.md' "$INJECT_HOOK")
+
+if [ "${#inject_files[@]}" -eq 0 ]; then
+    fail "could not derive the injected file list from hooks/inject-context.sh"
+else
+    bytes=$(wc -c "${inject_files[@]}" | tail -1 | awk '{print $1}')
+    grep -qF "$bytes" "$README" \
+        && ok "README states the current context-cost byte total ($bytes)" \
+        || fail "README does not state the current context-cost byte total ($bytes)"
+fi
+
 exit "$rc"

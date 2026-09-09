@@ -23,6 +23,22 @@ check() {
     fi
 }
 
+# check_stderr <name> <expected-exit> <hook> <json> <substring> — as check, but also asserts
+# the hook's stderr contains <substring>, so a block message's actual text is pinned, not just
+# its exit code.
+check_stderr() {
+    local name="$1" want="$2" hook="$3" json="$4" needle="$5" got err
+    err=$(printf '%s' "$json" | "$HOOKS/$hook" 2>&1 >/dev/null)
+    got=$?
+    if [ "$got" != "$want" ]; then
+        fail=$((fail + 1)); echo "  FAIL: $name (want exit $want, got $got)"
+    elif ! grep -qF -- "$needle" <<<"$err"; then
+        fail=$((fail + 1)); echo "  FAIL: $name (stderr missing '$needle')"
+    else
+        pass=$((pass + 1)); echo "  ok: $name"
+    fi
+}
+
 # check_env <name> <expected-exit> <hook> <json> <VAR=VAL>... — as check, but with the
 # named variables set for the hook process only, so a kill switch or a tuning knob can be
 # exercised without leaking into the rest of the run.
@@ -38,11 +54,46 @@ check_env() {
     fi
 }
 
+# check_no_jq <name> <expected-exit> <hook> <json> — as check, but runs the hook under a
+# minimal PATH (a mktemp -d dir holding symlinks to bash and cat only), so `command -v jq`
+# genuinely fails and the fail-open guard is exercised for real. Stripping PATH entirely (or
+# shadowing jq with an exported shell function) both measured wrong: an empty PATH also
+# removes cat, and `command -v` resolves a shadowed shell function, so the guard never fires.
+check_no_jq() {
+    local name="$1" want="$2" hook="$3" json="$4" got tmpbin
+    tmpbin=$(mktemp -d)
+    ln -s "$(command -v bash)" "$tmpbin/bash"
+    ln -s "$(command -v cat)" "$tmpbin/cat"
+    printf '%s' "$json" | env PATH="$tmpbin" "$HOOKS/$hook" >/dev/null 2>&1
+    got=$?
+    rm -rf "$tmpbin"
+    if [ "$got" = "$want" ]; then
+        pass=$((pass + 1)); echo "  ok: $name"
+    else
+        fail=$((fail + 1)); echo "  FAIL: $name (want exit $want, got $got)"
+    fi
+}
+
 echo "== agent-model-pin.sh =="
 check "spawn without model is blocked"        2 agent-model-pin.sh '{"tool_input":{"subagent_type":"general-purpose"}}'
 check "spawn with model is allowed"           0 agent-model-pin.sh '{"tool_input":{"subagent_type":"general-purpose","model":"opus"}}'
 check "fork is exempt"                        0 agent-model-pin.sh '{"tool_input":{"subagent_type":"fork"}}'
 check "fork without model still exempt"       0 agent-model-pin.sh '{"tool_input":{"subagent_type":"fork","model":""}}'
+check "model haiku is allowed"                0 agent-model-pin.sh '{"tool_input":{"model":"haiku"}}'
+check "model sonnet is allowed"               0 agent-model-pin.sh '{"tool_input":{"model":"sonnet"}}'
+check "model fable is blocked"                2 agent-model-pin.sh '{"tool_input":{"model":"fable"}}'
+check "model banana is blocked"               2 agent-model-pin.sh '{"tool_input":{"model":"banana"}}'
+check "fork exempt even with model fable"     0 agent-model-pin.sh '{"tool_input":{"subagent_type":"fork","model":"fable"}}'
+check_stderr "no-model message says no explicit model" 2 agent-model-pin.sh \
+    '{"tool_input":{"subagent_type":"general-purpose"}}' \
+    "BLOCKED: subagent spawn without an explicit model."
+check_stderr "invalid-model message echoes the offending value" 2 agent-model-pin.sh \
+    '{"tool_input":{"model":"banana"}}' \
+    "'banana' is not a valid subagent model"
+check_stderr "fable message names the orchestrator" 2 agent-model-pin.sh \
+    '{"tool_input":{"model":"fable"}}' \
+    "fable is the orchestrator's model"
+check_no_jq "valid payload allowed without jq" 0 agent-model-pin.sh '{"tool_input":{"model":"haiku"}}'
 
 echo
 echo "== bash-guard.sh =="

@@ -1,12 +1,12 @@
 # workflow-kit
 
-[![version](https://img.shields.io/badge/version-0.7.1-blue)](.claude-plugin/plugin.json)
+[![version](https://img.shields.io/badge/version-0.8.0-blue)](.claude-plugin/plugin.json)
 
 An evidence-first Claude Code workflow, packaged as a plugin. One install gives you:
 verification standards with a claim-class proof table, a 7-phase plan/spec/build
 methodology with an adversarial spec review, a pre-commit review gate over everything
 changed since the last review that also refuses to commit while verification is still
-running, subagent model tiers enforced by hooks, a guard against burning the main thread
+running, subagent model roles enforced by hooks, a guard against burning the main thread
 on foreground waiting, a compaction gate that holds auto-compaction until the session has
 checkpointed, and the
 [CodeGraph](https://github.com/colbymchenry/codegraph) MCP for structural code
@@ -28,9 +28,9 @@ into your `~/.claude`.
 | Component | Mechanism | Effect |
 |---|---|---|
 | Verification standards | `SessionStart` → [`hooks/inject-context.sh`](hooks/inject-context.sh) injects [`context/verification-standards.md`](context/verification-standards.md) | Every session starts with the honesty/verification rules and the claim-class table (static / runtime / data / rendering / tooling — each with its one admissible proof) |
-| Orchestration | Same document | The main session plans, delegates, verifies and integrates — it does not write feature code itself. Each implementation agent is briefed with the files it owns, the files it must not touch, the invariants to hold and the commands to run; overlapping file sets are sequenced, never parallel; and subagents never touch git state |
+| Orchestration | Same document | The main session plans, delegates, verifies and integrates — it does not write feature code itself. Each implementation agent gets an eight-item brief — goal, exact files or URLs in scope, what it may change, what it must verify, what it must not do, output format and limit, and what is already known; overlapping file sets are sequenced, never parallel; and subagents never touch git state |
 | Methodology | Same hook injects [`context/groundwork.md`](context/groundwork.md) | FRAME → INTERVIEW → PLAN → SPEC (sub-agent) → **adversarial spec review** → GATE → BUILD (churn-breaker, delegation threshold, parallel fan-out rules) → REVIEW of the integrated diff |
-| Model-pin guard | `PreToolUse` on `Agent\|Task` → [`hooks/agent-model-pin.sh`](hooks/agent-model-pin.sh) | Denies any subagent spawn without an explicit `model`: **haiku** (read-only mechanical) · **sonnet** (mechanical with edits) · **opus** (judgment). Forks exempt |
+| Model-pin guard | `PreToolUse` on `Agent\|Task` → [`hooks/agent-model-pin.sh`](hooks/agent-model-pin.sh) | Denies any subagent spawn without an explicit `model` in `{haiku, sonnet, opus}`, pinned by role: **haiku** = Scout · **sonnet** = Researcher / Builder · **opus** = Refuter / Debugger. `fable` is rejected — it names the orchestrator, never a subagent. Forks exempt. Fails open (exits 0) when `jq` is missing |
 | Bash guard | `PreToolUse` on `Bash` → [`hooks/bash-guard.sh`](hooks/bash-guard.sh) | Blocks `cd <current-dir> && …` prefixes (cwd persists between calls), bare symbol-greps in CodeGraph-indexed repos, and **foreground waiting** — an `until`/`while` poll loop or a `sleep` of 10s or more on the main thread. The message names the fix: the same command with `run_in_background: true` for one completion notification, or `Monitor` for one per occurrence. Literal-text searches, background runs and short settling delays stay allowed |
 | Commit gate | [`skills/commit-gate-guard`](skills/commit-gate-guard/SKILL.md) + `PreToolUse` on `Bash` → [`hooks/commit-gate-check.sh`](hooks/commit-gate-check.sh) | One small, bounded review pass over everything changed **since the last recorded review** — not just the staged diff — before `git commit`. Blocks on a CRITICAL/IMPORTANT finding, and blocks while a tracked verification run is still alive (`.claude/.commit-gate/inflight/<kind>.pid`, or `bg-watch`'s `run-tracked-<kind>.pid`). **Opt-in per repo**: the hook stays out of the way until you `mkdir -p "$(git rev-parse --show-toplevel)/.claude/.commit-gate"` — one gate directory per repo, at its root |
 | Spec gate | `PreToolUse` on `ExitPlanMode` and `Edit|Write` → [`hooks/spec-gate-check.sh`](hooks/spec-gate-check.sh) | Refuses plan approval, and the third source file in two hours, until the SPEC phase produced `.claude/specs/<slug>.md` carrying an `## Adversarial review` section — BLOCKER/GAP/NOTE entries, or "none found" plus the six checks run. Structural, not semantic: it proves the artifact exists, not that the adversary was good, so it stops silent skipping rather than deliberate circumvention. **Opt-in per repo**: `mkdir -p .claude/.spec-gate`. Tunable: `WORKFLOW_SPEC_GATE_FREE_FILES` (2), `WORKFLOW_SPEC_GATE_WINDOW_MIN` (120), `WORKFLOW_SPEC_GATE_TTL_MIN` (480), `WORKFLOW_SPEC_GATE=off`. `ExitPlanMode` carries no file path, so it resolves the repo from `cwd` and only fires once the session has already edited a file there — otherwise a plan whose work targets a *different* repo is falsely blocked whenever the shell sits in an opt-in one. The `Edit|Write` half is the load-bearing one |
@@ -43,9 +43,9 @@ CodeGraph needs a per-repository index before it answers: run `codegraph init -i
 The bash-guard grep rule only activates where a `.codegraph/` directory exists, so
 un-indexed repos behave exactly as before.
 
-**Context cost, stated honestly:** the two injected documents are ~22 KB per session.
-That is the same price a CLAUDE.md of that size would pay — the workflow considers it
-the highest-yield 22 KB in the budget, but it is not free.
+**Context cost, stated honestly:** the two injected documents are 23534 bytes (~23 KB)
+per session. That is the same price a CLAUDE.md of that size would pay — the workflow
+considers it the highest-yield 23 KB in the budget, but it is not free.
 
 ## Companion plugins (optional, same author)
 
@@ -71,9 +71,11 @@ the highest-yield 22 KB in the budget, but it is not free.
    stack; the claim-class table and the scope-discipline rules are the parts worth
    keeping verbatim.
 2. **The model-pin hook changes behavior immediately** — anything that spawns
-   subagents without a `model` gets denied with a message naming the tiers; it
-   self-corrects on retry. Too strict on day one? Remove the `Agent|Task` block from
-   [`hooks/hooks.json`](hooks/hooks.json) in your fork.
+   subagents without a `model` gets denied with a message naming the roles; it
+   self-corrects on retry. A model id the harness adds later is rejected until the
+   hook's allowed set (`haiku`, `sonnet`, `opus`) is updated — until then the escape
+   hatch is the same one as below. Too strict on day one? Remove the `Agent|Task` block
+   from [`hooks/hooks.json`](hooks/hooks.json) in your fork.
 3. **The guard hooks require `jq`** (present on most dev machines). Without it they
    fail open — nothing breaks, nothing is enforced.
 4. **The compact gate needs one setting outside the plugin.** Arming it is
@@ -91,8 +93,11 @@ Each rule answers a failure that actually happened, not a preference:
 - **Interview + plan gate** — mid-task corrections were already rare with it. Kept.
 - **Churn-breaker (3rd edit of a file → delegate)** — long rework loops on the main thread kept
   not converging; a fresh agent handed the failure output did.
-- **Subagent model tiers, hook-enforced** — spawns silently inherited the main loop's premium
-  model and the cheap tier went unused. A default nobody sets is a default nobody notices.
+- **Subagent roles, hook-enforced** — spawns silently inherited the main loop's premium
+  model and the cheap roles went unused. A default nobody sets is a default nobody notices. A
+  rule keyed on read-vs-write sends a research task to the cheapest model and gets a shallow
+  answer; keyed on role instead, reading-to-locate (Scout) and reading-to-report (Researcher)
+  separate.
 - **Bash guard** — `cd` into the current directory is always redundant, and a symbol grep in an
   indexed repo is the slower, less accurate way to ask a question the index already answers.
 - **Foreground-wait guard** — waiting was the largest single sink of main-thread time, while the

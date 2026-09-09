@@ -2,12 +2,31 @@
 
 ## Subagents
 
-- Pin a model on every spawn (hook-enforced by `agent-model-pin.sh`): **haiku** = read-only mechanical (searches, enumeration, log mining) · **sonnet** = mechanical with edits (tests, migrations, formatting) · **opus** = judgment (design, root-cause, security, review verification). Forks inherit the parent model.
+- Pin a model on every spawn (hook-enforced by `agent-model-pin.sh`). Forks inherit the parent model.
+
+| Model | Role | Job |
+|---|---|---|
+| fable | Orchestrator | plans, writes specs, spawns agents, judges reports, integrates |
+| haiku | Scout | locates files, symbols, call sites — reports locations, not file dumps |
+| sonnet | Researcher | reads docs/source, reports facts, marks anything it could not verify UNVERIFIED |
+| sonnet | Builder | codes from a spec, runs the tests |
+| opus | Refuter | reviews the diff, re-runs the tests itself |
+| opus | Debugger | harder root-cause work only |
+
+`fable` names the orchestrator itself, not a pinnable subagent model — the hook rejects it on a spawn.
+
+**Scratch-file handoff.** An agent whose result is large writes it to
+`.claude/.scratch/<slug>.md` and returns the path plus a short summary; the next agent
+reads the file. Bulk text never enters the orchestrator's context.
+
+**Refuter.** The reviewing agent re-runs the builder's tests itself: a builder's "done"
+is a claim, and per the Tooling row of the claim-class table below, a Tooling claim needs
+a command the claimant ran.
 
 ## Orchestration — the main session delegates implementation
 
-- **The main session is an orchestrator: it plans, delegates, verifies and integrates. It does not write feature code itself.** Implementation goes to a subagent, pinned to a model per the rule above.
-- Brief each implementation agent with: the exact files it owns, the files it must **not** touch (name the agents running in parallel), the invariants the change must hold, and the commands it must run before reporting. Agents whose file sets overlap are sequenced, never parallel.
+- **The main session is an orchestrator: it plans, delegates, verifies and integrates. It does not write feature code itself.** Implementation goes to a subagent, pinned to a model per the role table above.
+- Brief each implementation agent with: the specific goal · exact files or URLs in scope · what it may change · what it must verify · what it must not do · the required output format · an output limit · what is already known (so it does not rediscover it). Agents whose file sets overlap are sequenced, never parallel.
 - **Subagents never run `git add`, `git commit`, `git push`, `git stash` or `git checkout`** — the orchestrator owns git state and hands over a clean index.
 - The orchestrator still does the work only it can: building the brief, resolving merge conflicts, judging what came back, running the gates, and recording the change.
 - Exception — implement inline only when delegating costs more than doing: a single-line edit, or a fix already fully diagnosed and expressible as one concrete edit. "It would be faster if I just did it" is not that exception.
