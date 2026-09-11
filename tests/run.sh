@@ -13,6 +13,10 @@ echo "== gate contract invariants =="
 bash "$HERE/check-gate-contract.sh" || rc=1
 
 echo
+echo "== injected context budget =="
+bash "$HERE/check-context-budget.sh" || rc=1
+
+echo
 echo "== JSON manifests valid =="
 for f in "$ROOT/.claude-plugin/plugin.json" "$ROOT/.claude-plugin/marketplace.json" "$ROOT/hooks/hooks.json" "$ROOT/.mcp.json"; do
   if python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$f" 2>/dev/null; then
@@ -26,7 +30,7 @@ echo
 echo "== every hook referenced by hooks.json exists and is executable =="
 while read -r h; do
   [ -n "$h" ] || continue
-  p="$ROOT/${h#*/hooks/}"; p="$ROOT/hooks/$(basename "$h")"
+  p="$ROOT/hooks/$h"
   if [ -x "$p" ]; then echo "  ok: $(basename "$h")"; else echo "  MISSING/NOT EXECUTABLE: $p"; rc=1; fi
 done < <(python3 - "$ROOT/hooks/hooks.json" <<'PY'
 import json, sys
@@ -36,7 +40,7 @@ for entries in d.get("hooks", {}).values():
         for hook in entry.get("hooks", []):
             cmd = hook.get("command", "")
             if "/hooks/" in cmd:
-                print(cmd.split("/hooks/")[-1].strip('"'))
+                print(cmd.split("/hooks/")[-1].strip('"').split()[0])
 PY
 )
 

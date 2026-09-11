@@ -1,6 +1,6 @@
 # workflow-kit
 
-[![version](https://img.shields.io/badge/version-0.8.0-blue)](.claude-plugin/plugin.json)
+[![version](https://img.shields.io/badge/version-0.9.0-blue)](.claude-plugin/plugin.json)
 
 An evidence-first Claude Code workflow, packaged as a plugin. One install gives you:
 verification standards with a claim-class proof table, a 7-phase plan/spec/build
@@ -27,8 +27,8 @@ into your `~/.claude`.
 
 | Component | Mechanism | Effect |
 |---|---|---|
-| Verification standards | `SessionStart` → [`hooks/inject-context.sh`](hooks/inject-context.sh) injects [`context/verification-standards.md`](context/verification-standards.md) | Every session starts with the honesty/verification rules and the claim-class table (static / runtime / data / rendering / tooling — each with its one admissible proof) |
-| Orchestration | Same document | The main session plans, delegates, verifies and integrates — it does not write feature code itself. Each implementation agent gets an eight-item brief — goal, exact files or URLs in scope, what it may change, what it must verify, what it must not do, output format and limit, and what is already known; overlapping file sets are sequenced, never parallel; and subagents never touch git state |
+| Verification standards | `SessionStart` → [`hooks/inject-context.sh`](hooks/inject-context.sh) injects [`context/verification-standards.md`](context/verification-standards.md) | Every session starts with the honesty/verification rules and the claim-class table (static / runtime / data / rendering / tooling — each with its one admissible proof), plus the tool-output rules that keep a test run, a typecheck trace or a colour-coded log from being pasted into the context whole |
+| Orchestration | Same hook, one invocation per document, injects [`context/orchestration.md`](context/orchestration.md) | The main session plans, delegates, verifies and integrates — it does not write feature code itself. Each implementation agent gets an eight-item brief — goal, exact files or URLs in scope, what it may change, what it must verify, what it must not do, output format and limit, and what is already known; overlapping file sets are sequenced, never parallel; and subagents never touch git state |
 | Methodology | Same hook injects [`context/groundwork.md`](context/groundwork.md) | FRAME → INTERVIEW → PLAN → SPEC (sub-agent) → **adversarial spec review** → GATE → BUILD (churn-breaker, delegation threshold, parallel fan-out rules) → REVIEW of the integrated diff |
 | Model-pin guard | `PreToolUse` on `Agent\|Task` → [`hooks/agent-model-pin.sh`](hooks/agent-model-pin.sh) | Denies any subagent spawn without an explicit `model` in `{haiku, sonnet, opus}`, pinned by role: **haiku** = Scout · **sonnet** = Researcher / Builder · **opus** = Refuter / Debugger. `fable` is rejected — it names the orchestrator, never a subagent. Forks exempt. Fails open (exits 0) when `jq` is missing |
 | Bash guard | `PreToolUse` on `Bash` → [`hooks/bash-guard.sh`](hooks/bash-guard.sh) | Blocks `cd <current-dir> && …` prefixes (cwd persists between calls), bare symbol-greps in CodeGraph-indexed repos, and **foreground waiting** — an `until`/`while` poll loop or a `sleep` of 10s or more on the main thread. The message names the fix: the same command with `run_in_background: true` for one completion notification, or `Monitor` for one per occurrence. Literal-text searches, background runs and short settling delays stay allowed |
@@ -43,9 +43,24 @@ CodeGraph needs a per-repository index before it answers: run `codegraph init -i
 The bash-guard grep rule only activates where a `.codegraph/` directory exists, so
 un-indexed repos behave exactly as before.
 
-**Context cost, stated honestly:** the two injected documents are 23534 bytes (~23 KB)
+**Context cost, stated honestly:** the three injected documents are 18955 bytes (~18.5 KB)
 per session. That is the same price a CLAUDE.md of that size would pay — the workflow
-considers it the highest-yield 23 KB in the budget, but it is not free.
+considers it the highest-yield 18.5 KB in the budget, but it is not free. A further ~5 KB sits
+in [`context/reference/`](context/reference) — the SPEC-phase prompts and skeleton, the
+parallel fan-out rules, the Chrome DevTools MCP rules — cited by absolute path from the
+injected documents and read only in the phase that needs them.
+
+**Why three documents and not one.** Claude Code saves a hook's stdout to a file and injects a
+2 KB preview in its place once the output passes roughly 10 KB. Measured on 2.1.268 with a
+sentinel-terminated payload from a throwaway `SessionStart` hook: **10001 B arrives inline,
+10100 B is replaced by `<persisted-output> … Preview (first 2KB)`**, and the
+`hookSpecificOutput.additionalContext` JSON form is capped identically — there is no way to route
+around it. Earlier releases emitted all of it from a single hook, 23533 B, so the standards were
+being paid for and never delivered. The cap applies per hook *result*, so the hook is now invoked
+once per document and each one stays under
+[`tests/check-context-budget.sh`](tests/check-context-budget.sh)'s 9500 B ceiling. The harness
+does not preserve the order of the results, which is why each document is self-contained and
+self-titled rather than a slice of one longer text.
 
 ## Companion plugins (optional, same author)
 
@@ -134,6 +149,11 @@ referenced by `hooks.json` exists and is executable, checks skill frontmatter, r
 and `shellcheck`, then exercises all four hooks end-to-end against their real stdin/exit-code
 contract — including a throwaway git repo for the commit gate (opt-in off, no marker, stale
 marker, matching marker, docs-only, `--dry-run`).
+
+`tests/check-context-budget.sh` additionally runs the injection hook for each document declared
+in `hooks.json` and fails if a chunk would exceed the deliverable ceiling, if the `@@KIT@@`
+placeholder survives expansion, if a `context/reference/` file is cited but missing (or ships but
+is cited by nobody), or if the byte total stated in this README has gone stale.
 
 ## Uninstall
 

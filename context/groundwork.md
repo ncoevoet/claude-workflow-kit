@@ -40,25 +40,24 @@ phases in order before and during the change. Skip the whole flow for trivial ed
 ### 4. SPEC
 
 - Spawn a **dedicated sub-agent** (Agent/Task tool), a Researcher-class spawn (sonnet), to write the implementation spec. The main thread does not write it.
-- This holds **even when the main thread just did the exploration itself** and feels faster writing it. Skipping it is the common failure: the spec then lives only in the main thread's context, where it is never re-read, and the plan file becomes a running narrative instead of a checkable artifact. Hand the sub-agent your exploration findings; that is what the prompt below is for.
+- This holds **even when the main thread just did the exploration itself** and feels faster writing it. Skipping it is the common failure: the spec then lives only in the main thread's context, where it is never re-read, and the plan file becomes a running narrative instead of a checkable artifact. Hand the sub-agent your exploration findings; that is what the reference file's prompt is for.
 - Target file: `.claude/specs/<slug>.md` in the current repo. Slug = task lowercased, non-alphanumerics → `-`, trimmed, deduped; append `-2`, `-3` if a file already exists.
 - The sub-agent writes ONLY that one file and builds NO source.
 - Per step the spec records: description · key decision · chosen default · verify method · affected files.
-- Hand the sub-agent the prompt and skeleton in the section below.
-- **Adversarial spec review (before GATE).** Spawn a SECOND, independent sub-agent (opus —
-  the Refuter role) that has NOT seen the exploration or the spec-writer's context: it gets only
-  the original task, the locked interview decisions, and the spec file path, with read access
-  to the tree. Its charter is to prove the spec incomplete — requirements no step covers,
-  affected files the steps omit (check callers/consumers of everything touched), `verify:`
-  checks that cannot fail, unhandled edge/error paths, premises the current tree contradicts,
-  and step-to-step contracts that don't line up. It returns findings only (BLOCKER / GAP /
-  NOTE, each with evidence) and edits nothing. The main thread adjudicates, patches the spec,
-  then records the adjudicated findings in the spec under a final `## Adversarial review`
-  section — BLOCKER/GAP/NOTE entries, or, when the review found nothing, "none found" plus
-  the six categories that were checked (list items or table rows both count) — and only then
-  proceeds to GATE. The reviewer still edits nothing; the main thread writes the section, so
-  what lands is adjudicated rather than raw. One pass; re-check only the fixes — no
-  adversary/writer ping-pong. In repos that opt in with `mkdir -p .claude/.spec-gate` this is hook-enforced (`spec-gate-check.sh`).
+- Prompt, adversarial-reviewer prompt, spec skeleton and field rules:
+  `@@KIT@@/context/reference/spec-template.md` — read it when you reach this phase.
+- **Adversarial spec review (before GATE).** Spawn a SECOND, independent sub-agent (opus — the
+  Refuter role) that has NOT seen the exploration or the spec-writer's context: it gets the
+  original task, the locked decisions and the spec path, with read access to the tree. Its
+  charter is to prove the spec incomplete across six categories — requirements no step covers,
+  affected files the steps omit (check callers/consumers of everything touched), `verify:` checks
+  that cannot fail, unhandled edge/error paths, premises the tree contradicts, step-to-step
+  contracts that don't line up. It returns findings only (BLOCKER / GAP / NOTE, each with
+  evidence) and edits nothing. The main thread adjudicates, patches the spec, records the
+  adjudicated findings under a final `## Adversarial review` section — or "none found" plus the
+  six checks run — and only then proceeds to GATE. One pass; re-check only the fixes, no
+  adversary/writer ping-pong. Hook-enforced (`spec-gate-check.sh`) in repos that opt in with
+  `mkdir -p .claude/.spec-gate`.
 
 ### 5. GATE
 
@@ -81,21 +80,10 @@ phases in order before and during the change. Skip the whole flow for trivial ed
   runs in a subagent (model pinned per the role table in verification-standards.md) that
   returns the diagnosis only; the main thread keeps the plan and the integrated view.
 
-**Fanning out to parallel agents.** Each agent gets an exclusive file list, and is told
-which neighbouring files a sibling is holding. Also tell it:
-
-- your brief may already be stale — verify premises against the tree, not against what
-  the brief asserts (a brief once said an endpoint wrote nothing to the database while
-  another agent was adding a write to it)
-- fallout reaching a file it does not own means **stop and report the list**, never guess
-- `git checkout` / `stash` / `reset` are forbidden: they discard siblings' work
-- run verification in the **foreground**; never start a background job and end the turn
-  waiting on it
-- paste failing-first evidence: break the line the test covers, watch it go red, restore
-  by retyping, watch it go green
-
-Verify each agent's claims yourself, ideally by breaking something *different* from what
-it reported. Reports are evidence, not proof.
+**Fanning out to parallel agents** — exclusive file lists, the stale-brief warning, the
+forbidden git verbs, the failing-first evidence rule: `@@KIT@@/context/reference/parallel-agents.md`.
+Verify each agent's claims yourself, ideally by breaking something *different* from what it
+reported. Reports are evidence, not proof.
 
 ### 7. REVIEW
 
@@ -116,89 +104,10 @@ Auto-compaction fires on the harness's clock, not on a task boundary. Left alone
 mid-edit and takes with it every piece of working state that lived only in reasoning.
 
 In a repository with a `.claude/.compact-gate/` directory the gate inverts that: automatic
-compaction is **blocked** until this session has written a checkpoint. The `SessionStart`
-hook prints the absolute path to write to — one file per session, so several sessions can
-share a working directory without racing each other.
-
-- **Write the checkpoint when the work is durable** — the spec is on disk, edits are saved,
-  sub-agent results are integrated, and nothing that matters exists only in your reasoning.
-  Not on a fixed interval, and never in the middle of a multi-file edit.
-- **Then make one more small tool call.** `PreCompact` only runs when the harness next
-  attempts compaction, which is on the following request. A session that checkpoints and
-  then goes quiet is never compacted at all.
-- **Contents**: the current phase, what is already durable, the exact next action, and any
-  files in flight. Write it for a reader who has lost the conversation, because that is
-  exactly who reads it — the same file is injected back on the `SessionStart` that follows
-  the compaction.
-- **Rewrite it every time.** The gate compares its mtime against the last compaction it let
-  through, so a stale checkpoint never opens the gate twice.
-
-Why block rather than simply tune the window down: measured on Claude Code 2.1.263, one
-identical eight-file read task with the auto-compact window at 100k **failed** when
-compaction was allowed — `Autocompact is thrashing: the context refilled to the limit
-within 3 turns of the previous compact, 3 times in a row` — and **completed** when the gate
-blocked the same seven compaction attempts. Compacting on a boundary you chose is cheaper
-than compacting on one the harness has to keep retrying.
-
-## SPEC phase — sub-agent prompt and template
-
-The sub-agent writes ONE file: the SPEC-phase target spec file (`.claude/specs/<slug>.md`). It builds no source.
-
-### Sub-agent prompt (use verbatim; fill `<task>`, `<spec-file>`, and the locked decisions)
-
-> Write an implementation spec to `<spec-file>` (create the file and its parent
-> directory if missing). Do not edit any other file. Do not build.
-> For the task "`<task>`" and these locked decisions from the interview:
-> `<decisions>` — produce the spec using the skeleton below. For EACH step state:
-> description, key decision, chosen default (and why), verify method, affected files.
-> Be surgical (§3): no speculative scope, no abstractions for single-use code.
-> Return the spec as your final message after writing the file.
-
-### Adversarial reviewer prompt (use verbatim; fill `<task>`, `<spec-file>`, `<decisions>`; model: opus — the Refuter role)
-
-> You are an adversarial spec reviewer. Read `<spec-file>` for the task "`<task>`" with locked
-> decisions `<decisions>`. You did not write it; assume it is incomplete until proven otherwise.
-> Verify its premises against the actual tree — read the code, do not trust the spec's claims.
-> Hunt ONLY for: (1) task requirements no step covers; (2) affected files the steps omit —
-> check callers/consumers of everything touched; (3) `verify:` checks that cannot fail;
-> (4) unhandled edge/error paths within the locked scope; (5) claims the current tree
-> contradicts; (6) step-to-step contracts that don't line up. Do not restyle, do not expand
-> scope, do not edit any file. Return a findings list — BLOCKER (spec is wrong) / GAP (missing
-> step/file/check) / NOTE — each with concrete evidence (file:line or a quoted spec line).
-> An empty list means you verified every category and found nothing: say which checks you ran.
-
-### Spec file skeleton
-
-```markdown
-# Spec: <task>
-
-## Objective + success criteria
-- <what "done" looks like; each criterion independently testable>
-
-## Files to create / change
-- <exact paths>
-
-## Open questions / risks
-- <unresolved items, name collisions, ambiguities, ordering risks>
-
-## Steps
-1. <description>
-   - key decision: <the fork this step turns on>
-   - default: <chosen default + one-line why>
-   - verify: <check that proves the step done>
-   - affected files: <paths>
-2. <...>
-
-## Final verification gate
-- <how to confirm the whole task is correct before declaring done>
-
-## Adversarial review
-- <BLOCKER/GAP/NOTE findings with verdicts, or "none found" + the 6 checks run>
-```
-
-### Field rules
-
-- **key decision** — the one fork that step turns on; if a step has none, it is probably too granular — merge it.
-- **default** — what to do absent further input; must be a concrete choice, not "it depends".
-- **verify** — runnable or observable; pairs with the PLAN phase's `verify:` clause.
-- **affected files** — exact paths, so the BUILD phase stays surgical.
+compaction is **blocked** until this session has written a checkpoint, and the `SessionStart`
+hook names the file to write — one per session, so sessions sharing a working directory do not
+race. Write it when the work is durable — spec on disk, edits saved, sub-agent results
+integrated, nothing that matters living only in your reasoning — never mid-edit. Then make one
+more small tool call: `PreCompact` only runs on the next compaction attempt, so a session that
+checkpoints and goes quiet is never compacted at all. Rewrite it every time; the gate compares
+its mtime against the last compaction it let through.

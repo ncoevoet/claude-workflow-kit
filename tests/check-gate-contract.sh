@@ -15,6 +15,7 @@ SKILL="$ROOT/skills/commit-gate-guard/SKILL.md"
 HOOK="$ROOT/hooks/commit-gate-check.sh"
 README="$ROOT/README.md"
 STANDARDS="$ROOT/context/verification-standards.md"
+ORCH="$ROOT/context/orchestration.md"
 BASH_HOOK="$ROOT/hooks/bash-guard.sh"
 rc=0
 
@@ -85,7 +86,7 @@ for entries in d.get("hooks", {}).values():
         for hook in entry.get("hooks", []):
             cmd = hook.get("command", "")
             if "/hooks/" in cmd:
-                print(cmd.split("/hooks/")[-1].strip('"'))
+                print(cmd.split("/hooks/")[-1].strip('"').split()[0])
 PY
 )
 while read -r name; do
@@ -120,14 +121,21 @@ grep -qE 'dev\*\|serve\*' "$HOOK" && grep -qiE 'dev.*serve.*never block|beginnin
 
 # 10. The wait guard only helps if its block message names the alternative the standards
 #     prescribe. A guard that says "no" without saying "instead" just gets worked around.
-in_files "waiting rule documented"  "run_in_background" "$STANDARDS" "$README"
+in_files "waiting rule documented"  "run_in_background" "$ORCH" "$README"
 wait_msg=$(grep -F 'BLOCKED: foreground wait' "$BASH_HOOK")
 [ -n "$wait_msg" ] && grep -qF 'run_in_background' <<<"$wait_msg" && grep -qF 'Monitor' <<<"$wait_msg" \
     && ok "wait guard names both alternatives in its message" \
     || fail "wait guard message no longer names run_in_background and Monitor"
-grep -qF 'bash-guard.sh' "$STANDARDS" \
+grep -qF 'bash-guard.sh' "$ORCH" \
     && ok "standards credit the enforcing hook" \
     || fail "standards no longer name bash-guard.sh as the enforcer"
+
+# 10b. The claim-class table and the tool-output rules are what verification-standards.md exists
+#      to carry. Splitting the payload across documents is exactly the change that could leave
+#      them behind while every other assertion in this file still passed.
+in_files "claim-class table present"   "| **Tooling**" "$STANDARDS"
+in_files "PIPESTATUS proof rule"       'PIPESTATUS[0]' "$STANDARDS"
+in_files "tool-output rules present"   "Tool output — what you let into the context" "$STANDARDS"
 
 echo
 echo "11. spec gate <-> groundwork <-> README"
@@ -184,29 +192,12 @@ echo "13. agent-model-pin.sh <-> verification-standards.md <-> README"
 PIN_HOOK="$ROOT/hooks/agent-model-pin.sh"
 
 for role in Scout Researcher Builder Refuter Debugger; do
-    in_files "role '$role' documented" "$role" "$PIN_HOOK" "$STANDARDS"
+    in_files "role '$role' documented" "$role" "$PIN_HOOK" "$ORCH"
 done
-in_files "fable named in the hook, README and standards" "fable" "$PIN_HOOK" "$README" "$STANDARDS"
+in_files "fable named in the hook, README and standards" "fable" "$PIN_HOOK" "$README" "$ORCH"
 
 grep -qF 'read-only mechanical' "$README" \
     && fail "retired 'read-only mechanical' wording still present in README.md" \
     || ok "retired 'read-only mechanical' wording is gone from README.md"
-
-# Derived from what inject-context.sh actually injects (by name), not a context/*.md glob —
-# a third context doc could sit in the glob's byte count while never reaching a session.
-INJECT_HOOK="$ROOT/hooks/inject-context.sh"
-inject_files=()
-while IFS= read -r rel; do
-    inject_files+=("$ROOT/$rel")
-done < <(grep -oE 'context/[A-Za-z0-9_.-]+\.md' "$INJECT_HOOK")
-
-if [ "${#inject_files[@]}" -eq 0 ]; then
-    fail "could not derive the injected file list from hooks/inject-context.sh"
-else
-    bytes=$(wc -c "${inject_files[@]}" | tail -1 | awk '{print $1}')
-    grep -qF "$bytes" "$README" \
-        && ok "README states the current context-cost byte total ($bytes)" \
-        || fail "README does not state the current context-cost byte total ($bytes)"
-fi
 
 exit "$rc"
