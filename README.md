@@ -1,6 +1,6 @@
 # workflow-kit
 
-[![version](https://img.shields.io/badge/version-0.9.0-blue)](.claude-plugin/plugin.json)
+[![version](https://img.shields.io/badge/version-0.9.1-blue)](.claude-plugin/plugin.json)
 
 An evidence-first Claude Code workflow, packaged as a plugin. One install gives you:
 verification standards with a claim-class proof table, a 7-phase plan/spec/build
@@ -43,8 +43,9 @@ CodeGraph needs a per-repository index before it answers: run `codegraph init -i
 The bash-guard grep rule only activates where a `.codegraph/` directory exists, so
 un-indexed repos behave exactly as before.
 
-**Context cost, stated honestly:** the three injected documents are 18955 bytes (~18.5 KB)
-per session. That is the same price a CLAUDE.md of that size would pay — the workflow
+**Context cost, stated honestly:** the three injected documents are 18859 bytes (~18.5 KB)
+per session — measured in their placeholder form, since the three reference paths expand to the
+install directory at emit time and move the exact figure by a few dozen bytes per machine. That is the same price a CLAUDE.md of that size would pay — the workflow
 considers it the highest-yield 18.5 KB in the budget, but it is not free. A further ~5 KB sits
 in [`context/reference/`](context/reference) — the SPEC-phase prompts and skeleton, the
 parallel fan-out rules, the Chrome DevTools MCP rules — cited by absolute path from the

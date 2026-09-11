@@ -7,9 +7,14 @@
 # replaced by `<persisted-output> … Preview (first 2KB)`. The same cap applies to the
 # `hookSpecificOutput.additionalContext` JSON form, so there is no way to route around it.
 #
-# The limit is per hook result, which is why hooks.json injects one document per hook. This test
-# measures what each hook actually emits — not what the file weighs — because the hook expands the
-# @@KIT@@ placeholder, and an expansion is exactly the kind of growth a file-size check misses.
+# The limit is per hook result, which is why hooks.json injects one document per hook.
+#
+# Two sizes, deliberately. The CEILING is checked against what the hook actually EMITS, because
+# that is what has to fit — the hook expands @@KIT@@ to the plugin root, and an expansion is
+# exactly the kind of growth a file-size check misses. The figure the README states is the
+# placeholder form instead, because the expanded length depends on where the plugin happens to be
+# installed: the same tree measured 18955 B locally and 19009 B on CI, purely from a longer
+# checkout path. A published number that moves with the install path is not a number.
 #
 # Exit 0 = every chunk is deliverable and the README's stated cost is current.
 set -u
@@ -45,25 +50,25 @@ if [ "${#docs[@]}" -eq 0 ]; then
     exit "$rc"
 fi
 
-total=0
+stated=0
 for doc in "${docs[@]}"; do
     out=$(CLAUDE_PLUGIN_ROOT="$ROOT" "$HOOK" "$doc")
-    n=$(printf '%s\n' "$out" | wc -c)
-    total=$((total + n))
-    if [ "$n" -le "$CEILING" ]; then
-        ok "chunk $doc: $n B (ceiling $CEILING)"
+    emitted=$(printf '%s\n' "$out" | wc -c)
+    stated=$((stated + $(wc -c < "$ROOT/context/$doc.md")))
+    if [ "$emitted" -le "$CEILING" ]; then
+        ok "chunk $doc: $emitted B emitted (ceiling $CEILING)"
     else
-        fail "chunk $doc: $n B exceeds the $CEILING B ceiling — it would reach the model as a 2 KB preview"
+        fail "chunk $doc: $emitted B exceeds the $CEILING B ceiling — it would reach the model as a 2 KB preview"
     fi
     case "$out" in
         *@@KIT@@*) fail "chunk $doc still contains the unexpanded @@KIT@@ placeholder" ;;
     esac
 done
-echo "  ${#docs[@]} chunks measured, $total B injected per session"
+echo "  ${#docs[@]} chunks measured, $stated B of documents injected per session"
 
-grep -qF "$total" "$README" \
-    && ok "README states the current per-session byte total ($total)" \
-    || fail "README does not state the current per-session byte total ($total)"
+grep -qF "$stated" "$README" \
+    && ok "README states the current per-session byte total ($stated)" \
+    || fail "README does not state the current per-session byte total ($stated)"
 
 # On-demand reference files earn their split only if the core documents actually point at them,
 # and only if every path they point at resolves.
