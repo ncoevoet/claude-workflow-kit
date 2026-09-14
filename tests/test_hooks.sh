@@ -496,6 +496,55 @@ else
     fail=$((fail + 1)); echo "  FAIL: source=compact did not replay the checkpoint"
 fi
 
+echo
+echo "== context-size-warn.sh =="
+# Contract: never blocks (always exit 0) and prints a PostToolUse additionalContext JSON
+# object at most ONCE per threshold per session. Silence is the common path — a notice
+# re-emitted on every tool call would become the context bloat it warns about.
+ctw=$(mktemp -d); ctwtmp="$ctw/tmp"; mkdir -p "$ctwtmp"
+ctx="$ctw/transcript.jsonl"
+ptu() { # ptu <session-id> <transcript-path> -> PostToolUse payload
+    printf '{"session_id":"%s","transcript_path":"%s","tool_name":"Bash"}' "$1" "$2"
+}
+# says <name> <session> <transcript> <needle|-> <VAR=VAL>... — asserts exit 0 and that stdout
+# does (needle) or does not (-) contain the needle.
+says() {
+    local name="$1" sid="$2" txp="$3" needle="$4" out got
+    shift 4
+    out=$(printf '%s' "$(ptu "$sid" "$txp")" | env TMPDIR="$ctwtmp" "$@" "$HOOKS/context-size-warn.sh" 2>/dev/null)
+    got=$?
+    if [ "$got" != 0 ]; then
+        fail=$((fail + 1)); echo "  FAIL: $name (hook must never block, got exit $got)"
+    elif [ "$needle" = "-" ] && [ -n "$out" ]; then
+        fail=$((fail + 1)); echo "  FAIL: $name (expected silence, got: $out)"
+    elif [ "$needle" != "-" ] && ! grep -qF -- "$needle" <<<"$out"; then
+        fail=$((fail + 1)); echo "  FAIL: $name (stdout missing '$needle')"
+    else
+        pass=$((pass + 1)); echo "  ok: $name"
+    fi
+}
+
+{ printf '{"type":"user","message":{"content":"hi"}}\n'; usage 2 100 50; } > "$ctx"
+says "under the notice line -> silent"        c1 "$ctx" -                 WORKFLOW_CTX_WARN=150000
+says "kill switch -> silent"                  c2 "$ctx" -                 WORKFLOW_CTX_WARN=off
+says "unreadable transcript -> silent"        c3 "$ctw/nope.jsonl" -      WORKFLOW_CTX_WARN=1
+printf 'not json\n' > "$ctw/bad.jsonl"
+says "malformed transcript -> silent"         c4 "$ctw/bad.jsonl" -       WORKFLOW_CTX_WARN=1
+says "session id with a slash -> silent"      ../esc "$ctx" -             WORKFLOW_CTX_WARN=1
+
+# Threshold crossings. The transcript's last assistant turn totals 152 tokens (2+100+50).
+says "over the notice line -> speaks"         c5 "$ctx" "notice line"     WORKFLOW_CTX_WARN=100 WORKFLOW_CTX_ALERT=100000
+says "same level again -> stays quiet"        c5 "$ctx" -                 WORKFLOW_CTX_WARN=100 WORKFLOW_CTX_ALERT=100000
+says "escalates to alert -> speaks again"     c5 "$ctx" "alert line"      WORKFLOW_CTX_WARN=100 WORKFLOW_CTX_ALERT=150
+says "alert repeats -> stays quiet"           c5 "$ctx" -                 WORKFLOW_CTX_WARN=100 WORKFLOW_CTX_ALERT=150
+says "straight to alert on a new session"     c6 "$ctx" "alert line"      WORKFLOW_CTX_WARN=100 WORKFLOW_CTX_ALERT=150
+# The notice must carry the measured number, not a generic nag.
+says "reports the measured size"              c7 "$ctx" "152 tokens"      WORKFLOW_CTX_WARN=100 WORKFLOW_CTX_ALERT=100000
+# Garbage thresholds fall back to the defaults rather than erroring or firing at 0.
+says "garbage threshold -> defaults apply"    c8 "$ctx" -                 WORKFLOW_CTX_WARN=abc
+
+rm -rf "$ctw"
+
 rm -rf "$cgt" "$rsm"
 
 echo

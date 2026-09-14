@@ -49,6 +49,13 @@ source, never after the fact.
   `/tmp/commit-gate-delta.diff`; apply it to anything that would not fit on one screen.
 - **Read a diff once per state.** Re-running `git diff` / `git status` over an unchanged tree
   stacks duplicate snapshots in the history and tells you nothing you did not already have.
+- **A topic boundary is a `/clear` boundary.** Context is re-read in full on every request, so a
+  session's cost is `context size × request count` — the same tool call at 400k costs ~3× what it
+  costs at 130k. Measured over 22 sessions of one project: 40% of requests ran above 200k and
+  burned 64% of the budget, and one session of 788 requests over 13 unrelated user turns was 42%
+  of all main-thread spend. When the current task is done, say so and let the user start fresh
+  rather than carrying its context into the next one. `context-size-warn.sh` reports the crossings;
+  acting on them is yours.
 
 ## Reporting what you did
 

@@ -101,6 +101,17 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/context-size-warn.sh",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
