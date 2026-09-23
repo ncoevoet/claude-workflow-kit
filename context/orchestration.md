@@ -27,9 +27,18 @@ is a claim, and per the Tooling row of the claim-class table in
 
 - **The main session is an orchestrator: it plans, delegates, verifies and integrates. It does not write feature code itself.** Implementation goes to a subagent, pinned to a model per the role table above.
 - Brief each implementation agent with: the specific goal · exact files or URLs in scope · what it may change · what it must verify · what it must not do · the required output format · an output limit · what is already known (so it does not rediscover it). Agents whose file sets overlap are sequenced, never parallel.
-- **Subagents never run `git add`, `git commit`, `git push`, `git stash` or `git checkout`** — the orchestrator owns git state and hands over a clean index.
+- **Verify the task's premise before spending an expensive agent loop on it.** A cheap, direct check against the real system (a curl call, a query, reading the actual file) up front is far cheaper than an authoring pass, a judging pass and a re-scope cycle discovering the premise was wrong. Put the premise check as step 0 of the brief, not as something the agent discovers on its own.
+- **Subagents never run state-changing git** — `add`, `commit`, `push`, `stash`, `checkout`, `restore`, `reset`, `rebase`, `merge`, `cherry-pick`, `switch`, `clean` — nor write the orchestrator's compaction checkpoint (`.claude/.compact-gate/**`). The orchestrator owns git state and hands over a clean index. Hook-enforced (`subagent-guard.sh`) by detecting the subagent-only `agent_id` field on the hook payload — this is not prose alone, because prose alone was broken: a builder once ran a project's translation-regenerating npm script followed by a destructive git checkout, silently discarding a sibling agent's uncommitted work. A project can deny additional command patterns via `.claude/subagent-deny.txt` (one ERE per line).
+- **Verifiers and judges run against a frozen build — a static build or a deployed target — never the hot-reloading dev server a builder is actively editing.** A builder's in-progress TypeScript error surfaces as an overlay that intercepts the verifier's clicks and produces a false FAIL; a passing check that was actually looking at someone else's mid-edit state is not a check.
+- **Gate cadence.** Per wave: run only the affected-scope tests plus the static gates (typecheck, lint, architecture) **in parallel**, on a tree no builder is currently editing. Run the full suite once per local commit, not once per wave — re-running the full suite on a moving tree throws results away the moment the next builder edits a file. **Commit locally after each verified wave** — this is not pushing, and does not require push approval; it turns a wave's result into a `git show` away instead of something reconstructed from transcripts if a later step goes wrong.
 - The orchestrator still does the work only it can: building the brief, resolving merge conflicts, judging what came back, running the gates, and recording the change.
 - Exception — implement inline only when delegating costs more than doing: a single-line edit, or a fix already fully diagnosed and expressible as one concrete edit. "It would be faster if I just did it" is not that exception.
+
+## Refuter — standing checklist
+
+Every refuter/review pass runs the checklist at `@@KIT@@/context/reference/refuter-checklist.md`
+against the diff, in addition to whatever the task-specific brief asks for — recurring defect
+patterns are cheaper to check for by habit than to rediscover per review.
 
 ## Waiting — never spend the main thread on it
 

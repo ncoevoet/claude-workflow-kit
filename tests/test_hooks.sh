@@ -548,5 +548,104 @@ rm -rf "$ctw"
 rm -rf "$cgt" "$rsm"
 
 echo
+echo "== subagent-guard.sh =="
+# Contract: no-op (exit 0) unless the payload carries agent_id — that field is present
+# only on subagent-originated calls (see the hook's header comment for the evidence).
+sg() { # sg <agent_id|""> <tool_name> <command-json-fragment> <cwd> -> PreToolUse payload
+    if [ -n "$1" ]; then
+        printf '{"agent_id":"%s","tool_name":"%s",%s,"cwd":"%s"}' "$1" "$2" "$3" "$4"
+    else
+        printf '{"tool_name":"%s",%s,"cwd":"%s"}' "$2" "$3" "$4"
+    fi
+}
+
+tsg=$(mktemp -d)
+GC='"tool_input":{"command":"git commit -m x"}'
+check "main session git commit -> allowed"        0 subagent-guard.sh "$(sg ""    Bash "$GC" "$tsg")"
+check "subagent git commit -> blocked"            2 subagent-guard.sh "$(sg sub1 Bash "$GC" "$tsg")"
+check "subagent git status -> allowed"             0 subagent-guard.sh "$(sg sub1 Bash '"tool_input":{"command":"git status"}' "$tsg")"
+check "subagent chained git push -> blocked"       2 subagent-guard.sh "$(sg sub1 Bash '"tool_input":{"command":"ls && git push origin x"}' "$tsg")"
+check "subagent git -C dir stash -> blocked"       2 subagent-guard.sh "$(sg sub1 Bash '"tool_input":{"command":"git -C sub stash"}' "$tsg")"
+check "subagent git branch (not denied) -> allowed" 0 subagent-guard.sh "$(sg sub1 Bash '"tool_input":{"command":"git branch feature-x"}' "$tsg")"
+check_stderr "commit block names the verbs and the orchestrator" 2 subagent-guard.sh \
+    "$(sg sub1 Bash "$GC" "$tsg")" "state-changing git"
+check_stderr "commit block says what to do instead" 2 subagent-guard.sh \
+    "$(sg sub1 Bash "$GC" "$tsg")" "Report the need back to the orchestrator"
+check_no_jq "valid payload allowed without jq"     0 subagent-guard.sh "$(sg sub1 Bash "$GC" "$tsg")"
+
+# (b) project-configured extra deny patterns: .claude/subagent-deny.txt, opt-in per project.
+mkdir -p "$tsg/.claude"
+printf 'npm[[:space:]]+run[[:space:]]+.*lang\n# a comment\n\nrm[[:space:]]+-rf[[:space:]]+/\n' > "$tsg/.claude/subagent-deny.txt"
+check "subagent-deny pattern match -> blocked"     2 subagent-guard.sh "$(sg sub1 Bash '"tool_input":{"command":"npm run oss:lang"}' "$tsg")"
+check "subagent-deny non-match -> allowed"         0 subagent-guard.sh "$(sg sub1 Bash '"tool_input":{"command":"npm run build"}' "$tsg")"
+check_stderr "deny-pattern message cites the pattern and file" 2 subagent-guard.sh \
+    "$(sg sub1 Bash '"tool_input":{"command":"npm run oss:lang"}' "$tsg")" ".claude/subagent-deny.txt"
+tsg_bare=$(mktemp -d)
+check "no deny file -> allowed"                    0 subagent-guard.sh "$(sg sub1 Bash '"tool_input":{"command":"npm run oss:lang"}' "$tsg_bare")"
+
+# (c) the compaction checkpoint is never a subagent's to write.
+CG_PATH="\"tool_input\":{\"file_path\":\"$tsg/.claude/.compact-gate/sessions/s1.md\"}"
+UNRELATED_PATH="\"tool_input\":{\"file_path\":\"$tsg/src/a.ts\"}"
+check "subagent write to compact-gate -> blocked"  2 subagent-guard.sh "$(sg sub1 Write "$CG_PATH" "$tsg")"
+check "main session write to compact-gate -> allowed" 0 subagent-guard.sh "$(sg "" Write "$CG_PATH" "$tsg")"
+check "subagent edit to compact-gate -> blocked"   2 subagent-guard.sh "$(sg sub1 Edit "$CG_PATH" "$tsg")"
+check "subagent multiedit to compact-gate -> blocked" 2 subagent-guard.sh "$(sg sub1 MultiEdit "$CG_PATH" "$tsg")"
+check "subagent write to unrelated file -> allowed" 0 subagent-guard.sh "$(sg sub1 Write "$UNRELATED_PATH" "$tsg")"
+check_stderr "compact-gate block names the checkpoint path" 2 subagent-guard.sh \
+    "$(sg sub1 Write "$CG_PATH" "$tsg")" ".claude/.compact-gate/**"
+
+# Tool types this hook does not gate at all must stay untouched.
+check "subagent Read tool -> allowed (not gated)"  0 subagent-guard.sh "$(sg sub1 Read '"tool_input":{"file_path":"'"$tsg"'/x"}' "$tsg")"
+
+rm -rf "$tsg" "$tsg_bare"
+
+echo
+echo "== added-line-rules-check.sh =="
+# Contract: SubagentStop payload in, no-op unless <root>/.claude/added-line-rules.txt exists;
+# scope is ADDED lines only (git diff -U0, plus untracked new files matching a rule's glob).
+alr=$(mktemp -d)
+(
+    cd "$alr" || exit 1
+    git init -q .
+    git config user.email t@t.t; git config user.name t
+    mkdir -p src
+    printf 'const a = 1;\n// pre-existing comment, never touched by the diff\n' > src/a.ts
+    git add src/a.ts
+    git commit -qm init
+) >/dev/null 2>&1
+
+al() { # al <agent_id> -> SubagentStop payload
+    printf '{"agent_id":"%s","cwd":"%s"}' "$1" "$alr"
+}
+
+check "no rules file -> allowed"                   0 added-line-rules-check.sh "$(al sub1)"
+
+mkdir -p "$alr/.claude"
+printf '# comment line, ignored\n\nsrc/*.ts\t//\tno // comments\n' > "$alr/.claude/added-line-rules.txt"
+
+check "rules present, no diff yet -> allowed"      0 added-line-rules-check.sh "$(al sub1)"
+check "pre-existing // line untouched -> allowed"  0 added-line-rules-check.sh "$(al sub1)"
+
+printf 'const a = 1;\n// pre-existing comment, never touched by the diff\n// newly added comment\n' > "$alr/src/a.ts"
+check "newly added // line -> blocked"             2 added-line-rules-check.sh "$(al sub1)"
+check_stderr "block lists file:line and the message" 2 added-line-rules-check.sh "$(al sub1)" \
+    "src/a.ts:3: no // comments"
+
+printf 'const a = 1;\n// pre-existing comment, never touched by the diff\nconst b = 2;\n' > "$alr/src/a.ts"
+check "added line that does not match -> allowed"  0 added-line-rules-check.sh "$(al sub1)"
+
+printf 'const c = 1;\n// a bad new file\n' > "$alr/src/c.ts"
+check "untracked new file matching glob -> blocked" 2 added-line-rules-check.sh "$(al sub1)"
+rm -f "$alr/src/c.ts"
+
+printf '// a bad new file, wrong extension\n' > "$alr/README.md"
+check "untracked file not matching any glob -> allowed" 0 added-line-rules-check.sh "$(al sub1)"
+rm -f "$alr/README.md"
+
+check_no_jq "valid payload allowed without jq"     0 added-line-rules-check.sh "$(al sub1)"
+
+rm -rf "$alr"
+
+echo
 echo "hooks: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
