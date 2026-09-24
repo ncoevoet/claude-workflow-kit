@@ -12,6 +12,19 @@ two-hour window; a third file requires the spec.
 3. **Surgical** — touch only what the task needs; don't refactor code that isn't broken; match existing style; every changed line traces to the request; remove only the orphans your change created, flag unrelated dead code rather than delete it.
 4. **Verify** — turn tasks into verifiable goals; give each step an explicit `verify:` check; reproduce bugs with a failing test first, then make it pass; loop until green.
 
+## Pre-edit contract — wait for the user's OK
+
+Before editing anything for a ticket — trivial edits included, and whether the edit is yours or a
+subagent's — list, then **stop and wait for the user's explicit OK**:
+
+1. the exact files, and the fields/symbols in them, that will change;
+2. what will NOT change (adjacent files, behaviour, data, contracts deliberately left alone);
+3. the domain rules being assumed (business rules, data invariants, API contracts), each one marked
+   verified (with its source) or assumed.
+
+The OK covers that list only. A file, field or rule outside it needs a new list and a new OK — never
+widen scope silently.
+
 ## Non-trivial work — plan before you build
 
 For any non-trivial task (new feature, multi-file change, refactor, or ambiguous scope), run these seven

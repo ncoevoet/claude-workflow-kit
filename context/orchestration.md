@@ -15,6 +15,15 @@
 
 `fable` names the orchestrator itself, not a pinnable subagent model — the hook rejects it on a spawn.
 
+**One level of subagents — no nesting.** Only the main session spawns agents. Every brief states:
+"Do the work yourself; do NOT spawn sub-agents or background agents." A nested agent is invisible
+in the user's agent panel, and its parent exits early and looks stalled — killing that parent
+kills the real work with it.
+
+**Every agent returns:** the commands it ran, test counts (files and tests), and pass/fail with the
+exit code of each. **Report no status you have not read in the agent's own output** — not from
+its brief, not from a prior agent, not inferred; if the output does not state it, say so.
+
 **Scratch-file handoff.** An agent whose result is large writes it to
 `.claude/.scratch/<slug>.md` and returns the path plus a short summary; the next agent
 reads the file. Bulk text never enters the orchestrator's context.
