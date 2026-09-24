@@ -77,8 +77,7 @@ source, never after the fact.
 3. **Use constants** instead of String literals
 4. **DRY** - Never duplicate code. Create shared utilities/components
 5. **English only** in ALL code text (comments, javadoc, logs, messages, variable names, commits)
-6. **No comments in code** - code must be self-documenting. If a comment seems needed, extract into a well-named method
-7. **Always read a file before rewriting it** - don't rely on memory
+6. **Always read a file before rewriting it** - don't rely on memory
 
 ## TypeScript/JavaScript (Deno)
 
