@@ -118,6 +118,24 @@ check "bounded for-loop poll blocked"         2 bash-guard.sh "{\"tool_input\":{
 check "short settling delay allowed"          0 bash-guard.sh "{\"tool_input\":{\"command\":\"kill -9 123; sleep 1; pgrep -f stub\"},\"cwd\":\"$tmp_plain\"}"
 check "quoted sleep literal allowed"          0 bash-guard.sh "{\"tool_input\":{\"command\":\"grep -n 'sleep 30' notes.txt\"},\"cwd\":\"$tmp_plain\"}"
 check "heredoc writing a wait loop allowed"   0 bash-guard.sh "{\"tool_input\":{\"command\":\"cat > w.sh <<EOF\\nsleep 30\\nEOF\"},\"cwd\":\"$tmp_plain\"}"
+
+# Process-wait loops: unbounded while/until on pgrep/pidof/ps|grep is blocked in BOTH
+# foreground and background; bounded (timeout-wrapped, or a counted for-loop) is allowed;
+# a pgrep -f pattern that self-matches the loop's own command line is blocked even bounded.
+pgrep_loop='while pgrep -f mysvc >/dev/null; do sleep 5; done; echo done'
+check "unbounded pgrep wait loop blocked (fg)"      2 bash-guard.sh "{\"tool_input\":{\"command\":\"$pgrep_loop\"},\"cwd\":\"$tmp_plain\"}"
+check "unbounded pgrep wait loop blocked (bg)"      2 bash-guard.sh "{\"tool_input\":{\"command\":\"$pgrep_loop\",\"run_in_background\":true},\"cwd\":\"$tmp_plain\"}"
+pidof_loop='until pidof mysvc >/dev/null; do sleep 5; done'
+check "unbounded pidof wait loop blocked"           2 bash-guard.sh "{\"tool_input\":{\"command\":\"$pidof_loop\"},\"cwd\":\"$tmp_plain\"}"
+psgrep_loop='while ps aux | grep -q mysvc; do sleep 5; done'
+check "unbounded ps|grep wait loop blocked"         2 bash-guard.sh "{\"tool_input\":{\"command\":\"$psgrep_loop\"},\"cwd\":\"$tmp_plain\"}"
+bounded_for='for i in $(seq 1 120); do pgrep mysvc >/dev/null || break; sleep 5; done'
+check "bounded for-loop pgrep wait allowed"         0 bash-guard.sh "{\"tool_input\":{\"command\":\"$bounded_for\"},\"cwd\":\"$tmp_plain\"}"
+bounded_timeout="timeout 600 bash -c 'while pgrep mysvc >/dev/null; do sleep 5; done'"
+check "timeout-wrapped pgrep wait loop allowed"     0 bash-guard.sh "{\"tool_input\":{\"command\":\"$bounded_timeout\"},\"cwd\":\"$tmp_plain\"}"
+incident="while pgrep -f 'node.*[v]itest' >/dev/null; do sleep 5; done; npx vitest run tests"
+check "incident command (self-matching pgrep -f) blocked" 2 bash-guard.sh "{\"tool_input\":{\"command\":\"$incident\"},\"cwd\":\"$tmp_plain\"}"
+check "plain background vitest run allowed"         0 bash-guard.sh "{\"tool_input\":{\"command\":\"npx vitest run tests\",\"run_in_background\":true},\"cwd\":\"$tmp_plain\"}"
 rm -rf "$tmp_plain" "$tmp_cg"
 
 echo
