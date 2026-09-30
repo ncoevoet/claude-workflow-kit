@@ -3,7 +3,7 @@
 > Loaded on demand — not part of the SessionStart payload. Read it when you enter the SPEC
 > phase of `groundwork.md`.
 
-The sub-agent writes ONE file: the SPEC-phase target spec file (`.claude/specs/<slug>.md`). It builds no source.
+The sub-agent writes ONE file: the SPEC-phase target spec file (`.claude/specs/<slug>.md`; in plan mode its agent plan file `~/.claude/plans/*-agent-*.md`, copied to `.claude/specs/` after approval). It builds no source. The plan must name that path — the ExitPlanMode gate reads it from the plan text.
 
 ### Sub-agent prompt (use verbatim; fill `<task>`, `<spec-file>`, and the locked decisions)
 

@@ -69,15 +69,18 @@ phases in order before and during the change. Skip the whole flow for trivial ed
   evidence) and edits nothing. The main thread adjudicates, patches the spec, records the
   adjudicated findings under a final `## Adversarial review` section — or "none found" plus the
   six checks run — and only then proceeds to GATE. One pass; re-check only the fixes, no
-  adversary/writer ping-pong. Hook-enforced (`spec-gate-check.sh`) in repos that opt in with
+  adversary/writer ping-pong. In plan mode the spec-writer can only write its own plan file
+  (`~/.claude/plans/*-agent-*.md`): resume it (SendMessage) to append the adjudicated review,
+  then copy the spec to `.claude/specs/` after approval. Hook-enforced (`spec-gate-check.sh`) in repos that opt in with
   `mkdir -p .claude/.spec-gate`.
 
 ### 5. GATE
 
 - Call **ExitPlanMode** to present the plan for explicit user approval.
 - HARD GATE: edit no file until the user approves.
-- In opt-in repos `ExitPlanMode` is hook-enforced: approval is refused until the SPEC file and
-  its `## Adversarial review` section exist.
+- In opt-in repos `ExitPlanMode` is hook-enforced from the plan text: name the spec path in the
+  plan (or `Spec: none — <reason>`); approval is refused until it exists with its
+  `## Adversarial review` section.
 - This *uses* native `ExitPlanMode` as its gate — it does not replace native plan mode.
 
 ### 6. BUILD

@@ -319,11 +319,6 @@ export WORKFLOW_SPEC_GATE_FREE_FILES=0
 check "opt-in, no spec -> blocked"            2 spec-gate-check.sh "$(ed "$deep/a.ts")"
 check "docs are never gated"                  0 spec-gate-check.sh "$(ed "$sg/README.md")"
 check ".claude/ files never gated"            0 spec-gate-check.sh "$(ed "$sg/.claude/settings.json")"
-# The plan gate needs a prior edit in this repo before it will fire (see the ExitPlanMode
-# block further down for why); prime it so this assertion tests the spec check, not that.
-printf '%s\t%s\n' "$(date +%s)" "$deep/seed.ts" > "$sg/.claude/.spec-gate/touched"
-check "ExitPlanMode, no spec -> blocked"      2 spec-gate-check.sh "{\"tool_input\":{},\"cwd\":\"$sg\"}"
-rm -f "$sg/.claude/.spec-gate/touched"
 
 # Writing the spec must never be blocked, including when it creates the directory,
 # and including with FREE_FILES=0 (self-lockout regression).
@@ -374,18 +369,78 @@ WORKFLOW_SPEC_GATE=off check "kill switch -> allowed" 0 spec-gate-check.sh "$(ed
 # Write creating a not-yet-existing directory must still resolve (readlink -m, not -f).
 check "write into missing dir -> blocked"     2 spec-gate-check.sh "$(ed "$deep/brand/new/dir/n.ts")"
 
-# ExitPlanMode has no file path, so it cannot know which repo a plan targets: it resolves the
-# root from cwd. Blocking on that alone falsely refuses a plan whose work lives in a DIFFERENT
-# repo, whenever the shell happens to sit in an opt-in one. Only gate it once the session has
-# actually edited something here.
-rm -f "$sg/.claude/.spec-gate/touched" "$sg/.claude/.spec-gate/current"
-check "ExitPlanMode, nothing touched -> allowed" 0 spec-gate-check.sh "{\"tool_input\":{},\"cwd\":\"$sg\"}"
-printf '%s\t%s\n' "$(date +%s)" "$deep/a.ts" > "$sg/.claude/.spec-gate/touched"
-check "ExitPlanMode after an edit -> blocked"    2 spec-gate-check.sh "{\"tool_input\":{},\"cwd\":\"$sg\"}"
-printf '%s\t%s\n' "$((`date +%s` - 99999))" "$deep/a.ts" > "$sg/.claude/.spec-gate/touched"
-check "ExitPlanMode, stale touches -> allowed"   0 spec-gate-check.sh "{\"tool_input\":{},\"cwd\":\"$sg\"}"
-rm -f "$sg/.claude/.spec-gate/touched"
-
+# ExitPlanMode is gated from the plan text (tool_input.plan), never from prior edits: in plan
+# mode nothing has been edited yet. Fixtures use generic paths only.
+rm -rf "$SPEC_DIR" "$sg/.claude/.spec-gate/touched" "$sg/.claude/.spec-gate/current"
+mkdir -p "$SPEC_DIR"
+pm() { # pm <plan text> [cwd] [extra tool_input json members] -> real-shaped ExitPlanMode payload
+    jq -cn --arg plan "$1" --arg cwd "${2:-$sg}" '{tool_name:"ExitPlanMode",tool_input:{plan:$plan,planFilePath:"/nonexistent/plan.md"},cwd:$cwd}'
+}
+good="$SPEC_DIR/good.md"; bad="$SPEC_DIR/bad.md"
+{ printf '# Spec: x\n\n## Adversarial review\n\n'; printf -- '- %s: x\n- GAP: y\n- NOTE: z\n' "$SEV"; } > "$good"
+printf '# Spec: x\n\n## Steps\n1. do it\n' > "$bad"
+unset WORKFLOW_SPEC_GATE_FREE_FILES
+check "plan, no spec, no waiver -> blocked"        2 spec-gate-check.sh "$(pm 'Just do the thing.')"
+check "plan, waiver -> allowed"                    0 spec-gate-check.sh "$(pm $'Intro\nSpec: none — one-line typo fix')"
+check "plan, bold/bullet waiver -> allowed"        0 spec-gate-check.sh "$(pm $'- **Spec:** none — trivial')"
+check "plan, absolute reviewed spec -> allowed"    0 spec-gate-check.sh "$(pm "Spec: \`$good\`")"
+check "plan, unreviewed spec -> blocked"           2 spec-gate-check.sh "$(pm "See $bad for details")"
+check "plan, missing spec path in opt-in -> blocked" 2 spec-gate-check.sh "$(pm "See $SPEC_DIR/nope.md")"
+check "plan, one valid + one unreviewed -> blocked" 2 spec-gate-check.sh "$(pm "$good and $bad")"
+check "plan, toplevel-relative spec from subdir -> allowed" 0 spec-gate-check.sh "$(pm 'Spec: .claude/specs/good.md' "$deep")"
+check "plan, glob mention only -> blocked"         2 spec-gate-check.sh "$(pm 'Specs live in `.claude/specs/*.md`.')"
+check "plan, empty plan and no file -> blocked"    2 spec-gate-check.sh "$(pm '')"
+# planFilePath fallback when tool_input.plan is absent.
+pf=$(mktemp); printf 'Spec: %s\n' "$good" > "$pf"
+check "plan via planFilePath, reviewed spec -> allowed" 0 spec-gate-check.sh "$(jq -cn --arg pf "$pf" --arg cwd "$sg" '{tool_name:"ExitPlanMode",tool_input:{planFilePath:$pf},cwd:$cwd}')"
+rm -f "$pf"
+# Opt-in is decided first: no opt-in anywhere -> a bogus path is not our business.
+plain=$(mktemp -d)
+check "plan, cwd not opted in, no spec -> allowed" 0 spec-gate-check.sh "$(pm 'no spec here' "$plain")"
+check "plan, cwd not opted in, spec owner opted in -> validated" 2 spec-gate-check.sh "$(pm "See $bad" "$plain")"
+rm -rf "$plain"
+# Markdown links and glued paths must still yield the path (`[ ] , : =` end a path).
+check "plan, markdown link -> allowed"             0 spec-gate-check.sh "$(pm 'Spec: [.claude/specs/good.md](.claude/specs/good.md)')"
+check "plan, Spec:/abs glued -> allowed"           0 spec-gate-check.sh "$(pm "Spec:$good")"
+check "plan, comma-glued relative -> allowed"      0 spec-gate-check.sh "$(pm 'x,.claude/specs/good.md')"
+# Waiver precedence: a named spec is always validated; the waiver only covers "names none".
+check "plan, waiver + unreviewed spec -> blocked"  2 spec-gate-check.sh "$(pm "Spec: none — trust me. Also see $bad")"
+check "plan, waiver alone -> allowed"              0 spec-gate-check.sh "$(pm 'Spec: none — typo')"
+# A stale spec must not reopen the gate (the pointer would be rewritten fresh).
+stale="$SPEC_DIR/stale.md"; cp "$good" "$stale"; touch -d '1 day ago' "$stale"
+check "plan, spec older than TTL -> blocked"       2 spec-gate-check.sh "$(pm "Spec: $stale")"
+# A spec from a repo that never opted in approves nothing in an opted-in cwd.
+check "plan, foreign non-opted-in spec -> blocked" 2 spec-gate-check.sh "$(pm "Spec: $other/.claude/specs/x.md")"
+# Plan-mode agent files count only under the canonical $HOME/.claude/plans/.
+mkdir -p "$other/.claude/plans"; cp "$good" "$other/.claude/plans/q-agent-1.md"
+check "plan, foreign agent plan file -> not a spec" 2 spec-gate-check.sh "$(pm "Spec: $other/.claude/plans/q-agent-1.md")"
+# A plan-mode agent file under $HOME is accepted as the spec, and its pointer unlocks edits.
+# Every fresh spec in the fallback dir is aged out first, so only the pointer can open the gate.
+fh=$(mktemp -d); mkdir -p "$fh/.claude/plans"
+cp "$good" "$fh/.claude/plans/x-agent-a1b2.md"
+rm -f "$sg/.claude/.spec-gate/current"
+HOME="$fh" check "plan naming agent plan file -> allowed" 0 spec-gate-check.sh "$(pm "Spec: $fh/.claude/plans/x-agent-a1b2.md")"
+touch -d '1 day ago' "$SPEC_DIR"/*.md
+export WORKFLOW_SPEC_GATE_FREE_FILES=0
+HOME="$fh" check "agent-file pointer opens the Edit gate (no fresh fallback spec)" 0 spec-gate-check.sh "$(ed "$deep/a.ts")"
+# Symlinked $HOME: the pointer and the named path are compared canonically.
+fl=$(mktemp -u); ln -s "$fh" "$fl"
+rm -f "$sg/.claude/.spec-gate/current"
+HOME="$fl" check "symlinked HOME, tilde path -> allowed" 0 spec-gate-check.sh "$(pm 'Spec: ~/.claude/plans/x-agent-a1b2.md')"
+HOME="$fl" check "symlinked HOME, pointer opens Edit gate" 0 spec-gate-check.sh "$(ed "$deep/a.ts")"
+rm -f "$fl"; rm -rf "$fh"
+unset WORKFLOW_SPEC_GATE_FREE_FILES
+touch "$SPEC_DIR"/*.md
+# Nested opt-in roots: a plan from sub/ naming a parent-level spec opens BOTH levels. The spec is
+# aged out after approval so neither edit can pass through the fallback scan — only the pointers.
+mkdir -p "$sg/sub/.claude/.spec-gate" "$sg/sub/x"
+rm -f "$sg/.claude/.spec-gate/current"
+check "nested: plan from sub naming parent spec"   0 spec-gate-check.sh "$(pm "Spec: $good" "$sg/sub")"
+touch -d '1 day ago' "$SPEC_DIR"/*.md
+export WORKFLOW_SPEC_GATE_FREE_FILES=0
+check "nested: edit in sub allowed (pointer only)" 0 spec-gate-check.sh "$(printf '{"tool_input":{"file_path":"%s"},"cwd":"%s"}' "$sg/sub/x/a.ts" "$sg/sub")"
+check "nested: edit in parent allowed (pointer only)" 0 spec-gate-check.sh "$(ed "$deep/a.ts")"
+rm -rf "$sg/sub"
 unset WORKFLOW_SPEC_GATE_FREE_FILES
 rm -rf "$sg" "$other"
 
