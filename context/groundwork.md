@@ -105,8 +105,9 @@ reported. Reports are evidence, not proof.
 ### 7. REVIEW
 
 - For any multi-file or multi-agent change, run an **independent review of the integrated
-  diff** before shipping. Fix CRITICAL/IMPORTANT findings, then re-run every gate. The
-  reviewer re-runs the gates itself, rather than reading the builder's report of them.
+  diff** before shipping. Fix CRITICAL/IMPORTANT findings, then re-run the static gates —
+  tests wait for the pre-push hook. The reviewer re-runs those gates itself, rather than
+  reading the builder's report of them.
 - Per-step `verify:` checks prove each step did what it said. They cannot see a contract
   that two steps agreed on wrongly, or a safety promise a docstring makes and the code
   breaks. A change once passed every gate — full suites, lint, typecheck — while

@@ -59,7 +59,7 @@ Skip **only** when the delta touches no code (docs, `*.md`, `.claude/`, config-o
 `review: N/A (no code in delta)` and go to the marker.
 
 Spawn **ONE** `general-purpose` agent with an explicit `model: opus` (the Refuter role, scoped
-to the diff — the gate's own in-flight-verification step below already covers the test run) —
+to the diff; it reviews and runs no tests — those belong to the pre-push hook) —
 one pass, no verifier fan-out, no multi-axis spawn. That is what keeps this cheap enough to
 run on every commit.
 
@@ -181,4 +181,6 @@ ran, and this proves the run it depended on actually finished.
 - One agent, one pass. If you want breadth, run the full review tool; this gate stays cheap so
   that it actually gets run.
 - Cite evidence: `file:line` and the failing input, never "looks wrong".
-- Do not run the full test suite here if the project gates tests at push — say where they run.
+- Run no test suite here: the review stays on commit, tests run in the pre-push hook. If the
+  repository's pre-push hook runs no tests, say so in the verdict — never fall back to running
+  them at commit.

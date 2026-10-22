@@ -28,9 +28,10 @@ its brief, not from a prior agent, not inferred; if the output does not state it
 `.claude/.scratch/<slug>.md` and returns the path plus a short summary; the next agent
 reads the file. Bulk text never enters the orchestrator's context.
 
-**Refuter.** The reviewing agent re-runs the builder's tests itself: a builder's "done"
-is a claim, and per the Tooling row of the claim-class table in
-`verification-standards.md`, a Tooling claim needs a command the claimant ran.
+**Refuter.** The reviewing agent re-runs the builder's static gates itself (typecheck, lint):
+a builder's "done" is a claim, and per the Tooling row of the claim-class table in
+`verification-standards.md`, a Tooling claim needs a command the claimant ran. It runs no
+test suite — tests belong to the pre-push hook (Gate cadence below).
 
 ## Orchestration — the main session delegates implementation
 
@@ -39,7 +40,7 @@ is a claim, and per the Tooling row of the claim-class table in
 - **Verify the task's premise before spending an expensive agent loop on it.** A cheap, direct check against the real system (a curl call, a query, reading the actual file) up front is far cheaper than an authoring pass, a judging pass and a re-scope cycle discovering the premise was wrong. Put the premise check as step 0 of the brief, not as something the agent discovers on its own.
 - **Subagents never run state-changing git** — `add`, `commit`, `push`, `stash`, `checkout`, `restore`, `reset`, `rebase`, `merge`, `cherry-pick`, `switch`, `clean` — nor write the orchestrator's compaction checkpoint (`.claude/.compact-gate/**`). The orchestrator owns git state and hands over a clean index. Hook-enforced (`subagent-guard.sh`) by detecting the subagent-only `agent_id` field on the hook payload — this is not prose alone, because prose alone was broken: a builder once ran a project's translation-regenerating npm script followed by a destructive git checkout, silently discarding a sibling agent's uncommitted work. A project can deny additional command patterns via `.claude/subagent-deny.txt` (one ERE per line).
 - **Verifiers and judges run against a frozen build — a static build or a deployed target — never the hot-reloading dev server a builder is actively editing.** A builder's in-progress TypeScript error surfaces as an overlay that intercepts the verifier's clicks and produces a false FAIL; a passing check that was actually looking at someone else's mid-edit state is not a check.
-- **Gate cadence.** Per wave: run only the affected-scope tests plus the static gates (typecheck, lint, architecture) **in parallel**, on a tree no builder is currently editing. Run the full suite once per local commit, not once per wave — re-running the full suite on a moving tree throws results away the moment the next builder edits a file. **Commit locally after each verified wave** — this is not pushing, and does not require push approval; it turns a wave's result into a `git show` away instead of something reconstructed from transcripts if a later step goes wrong.
+- **Gate cadence.** Per wave: the static gates (typecheck, lint, architecture) **in parallel**, on a tree no builder is currently editing, then the commit gate's review. **Tests run in the pre-push hook, never per wave or per commit** — a suite costs minutes on every commit, and a run on a moving tree is stale the moment the next builder edits a file. The one exception is a builder running the spec it is writing or fixing, to see it fail then pass. A repository with no test step in its pre-push hook runs the suite once, just before `git push`. **Commit locally after each verified wave** — this is not pushing, and does not require push approval; it turns a wave's result into a `git show` away instead of something reconstructed from transcripts if a later step goes wrong.
 - The orchestrator still does the work only it can: building the brief, resolving merge conflicts, judging what came back, running the gates, and recording the change.
 - Exception — implement inline only when delegating costs more than doing: a single-line edit, or a fix already fully diagnosed and expressible as one concrete edit. "It would be faster if I just did it" is not that exception.
 
