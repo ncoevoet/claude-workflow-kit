@@ -1,7 +1,8 @@
 # Groundwork — how I always work
 
 These rules always govern how I work. They are not a command or skill to invoke — they are always in
-effect. For trivial edits (typo, rename, obvious one-liner), use judgment and just make the edit. Where the
+effect. For trivial edits (typo, rename, obvious one-liner), skip the planning flow below and just make the
+edit — the pre-edit contract still applies to ticket work, trivial edits included. Where the
 spec gate is armed, the machine approximation of "trivial" is the first two distinct files in a
 two-hour window; a third file requires the spec.
 
