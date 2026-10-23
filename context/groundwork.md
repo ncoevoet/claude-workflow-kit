@@ -8,7 +8,7 @@ two-hour window; a third file requires the spec.
 
 ## Principles
 
-1. **Think first** — state assumptions; when interpretations differ, present them, never pick silently; push back when a simpler approach fits; if unclear, stop and name it.
+1. **Think first** — state assumptions; when interpretations differ, present them, never pick silently; push back when a simpler approach fits; if unclear, stop and name it. An ad-hoc request (not a ticket) with more than one plausible reading — which field, forms or apps; recommend vs audit vs fix — gets restated in 2–3 bullets (what, where, which approach) before any action.
 2. **Simplicity** — minimum that solves the problem; nothing speculative; no abstractions for single-use; no error handling for impossible cases. If 200 lines could be 50, rewrite it.
 3. **Surgical** — touch only what the task needs; don't refactor code that isn't broken; match existing style; every changed line traces to the request; remove only the orphans your change created, flag unrelated dead code rather than delete it.
 4. **Verify** — turn tasks into verifiable goals; give each step an explicit `verify:` check; reproduce bugs with a failing test first, then make it pass; loop until green.
