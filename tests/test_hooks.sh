@@ -719,6 +719,53 @@ check_no_jq "valid payload allowed without jq"     0 added-line-rules-check.sh "
 
 rm -rf "$alr"
 
+echo "agent-status-record.sh"
+asr=$(mktemp -d "${TMPDIR:-/tmp}/wfk-asr.XXXXXX")
+asr_in() { jq -nc --arg c "$asr" --arg id "$1" '{cwd:$c, agent_id:$id, agent_type:"builder", last_assistant_message:"done"}'; }
+check "status record: valid payload exits 0" 0 agent-status-record.sh "$(asr_in ag-1_x)"
+f="$asr/.claude/.scratch/agents/ag-1_x.json"
+if [ -f "$f" ] && jq -e '.agent_id == "ag-1_x" and .agent_type == "builder" and .last_message_tail == "done" and (.stopped_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$"))' "$f" >/dev/null; then
+    pass=$((pass + 1)); echo "  ok: status record file has the right fields"
+else
+    fail=$((fail + 1)); echo "  FAIL: status record file missing or wrong fields"
+fi
+long=$(head -c 2000 /dev/zero | tr '\0' 'x')
+printf '%s' "$(jq -nc --arg c "$asr" --arg m "$long" '{cwd:$c, agent_id:"ag-long", agent_type:"scout", last_assistant_message:$m}')" | "$HOOKS/agent-status-record.sh" >/dev/null 2>&1
+[ "$(jq -r '.last_message_tail | length' "$asr/.claude/.scratch/agents/ag-long.json" 2>/dev/null)" = "600" ] \
+    && { pass=$((pass + 1)); echo "  ok: last_message_tail capped at 600 chars"; } \
+    || { fail=$((fail + 1)); echo "  FAIL: last_message_tail not capped at 600 chars"; }
+check "status record: malicious agent_id exits 0" 0 agent-status-record.sh "$(asr_in '../../evil/$(id)')"
+if [ -f "$asr/.claude/.scratch/agents/evilid.json" ] && [ ! -e "$asr/evil" ] && [ ! -e "$asr/.claude/evil" ]; then
+    pass=$((pass + 1)); echo "  ok: malicious agent_id sanitized into the agents dir"
+else
+    fail=$((fail + 1)); echo "  FAIL: malicious agent_id escaped or not sanitized"
+fi
+before=$(find "$asr" -type f | wc -l)
+check "status record: missing agent_id exits 0" 0 agent-status-record.sh "$(jq -nc --arg c "$asr" '{cwd:$c, agent_type:"builder"}')"
+[ "$(find "$asr" -type f | wc -l)" = "$before" ] \
+    && { pass=$((pass + 1)); echo "  ok: missing agent_id writes nothing"; } \
+    || { fail=$((fail + 1)); echo "  FAIL: missing agent_id wrote a file"; }
+check "status record: garbage stdin exits 0" 0 agent-status-record.sh "not json"
+check_no_jq "status record: no jq exits 0" 0 agent-status-record.sh "$(asr_in ag-nojq)"
+[ ! -e "$asr/.claude/.scratch/agents/ag-nojq.json" ] \
+    && { pass=$((pass + 1)); echo "  ok: no jq writes nothing"; } \
+    || { fail=$((fail + 1)); echo "  FAIL: no jq still wrote a file"; }
+rm -rf "$asr"
+
+echo "agents/*.md"
+for a in builder refuter scout; do
+    af="$HERE/../agents/$a.md"
+    fm=$(awk 'NR==1 && $0!="---"{exit} NR>1 && $0=="---"{exit} NR>1{print}' "$af" 2>/dev/null)
+    tools=$(sed -n 's/^tools:[[:space:]]*//p' <<<"$fm")
+    if grep -q "^name: $a$" <<<"$fm" && grep -q '^description: .' <<<"$fm" \
+        && grep -qE '^model: (haiku|sonnet|opus)$' <<<"$fm" && [ -n "$tools" ] \
+        && ! grep -qwE 'Agent|Task' <<<"$tools"; then
+        pass=$((pass + 1)); echo "  ok: agents/$a.md frontmatter valid, no Agent/Task tool"
+    else
+        fail=$((fail + 1)); echo "  FAIL: agents/$a.md frontmatter invalid or grants Agent/Task"
+    fi
+done
+
 echo
 echo "hooks: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

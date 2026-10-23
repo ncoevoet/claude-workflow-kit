@@ -140,6 +140,11 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/added-line-rules-check.sh",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/agent-status-record.sh",
+            "timeout": 5
           }
         ]
       }
