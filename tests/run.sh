@@ -57,7 +57,7 @@ done
 
 echo
 echo "== shell syntax (bash -n) =="
-for f in "$ROOT"/hooks/*.sh "$ROOT"/tests/*.sh "$ROOT"/tools/*.sh; do
+for f in "$ROOT"/hooks/*.sh "$ROOT"/tests/*.sh "$ROOT"/tools/*.sh "$ROOT"/evals/*/*.sh "$ROOT"/evals/*/tasks/*/grade.sh; do
   [ -e "$f" ] || continue
   if bash -n "$f"; then echo "  ok: ${f##*/}"; else echo "  SYNTAX ERROR: $f"; rc=1; fi
 done
@@ -65,7 +65,8 @@ done
 echo
 echo "== shellcheck (if available) =="
 if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck "$ROOT"/hooks/*.sh "$ROOT"/tools/*.sh; then echo "  shellcheck clean"; else rc=1; fi
+  if shellcheck "$ROOT"/hooks/*.sh "$ROOT"/tools/*.sh &&
+     (cd "$ROOT" && shellcheck -x evals/*/*.sh evals/*/tasks/*/grade.sh); then echo "  shellcheck clean"; else rc=1; fi
 else
   echo "  shellcheck not installed locally — 0 files checked here; CI runs it"
 fi

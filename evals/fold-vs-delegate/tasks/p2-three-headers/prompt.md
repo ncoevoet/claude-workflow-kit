@@ -1,0 +1,1 @@
+Each of shop/reports.py, shop/export.py and shop/audit.py has a *_header() function. Give each a new keyword argument upper=False; when it is True, return the header in upper case. Add one test per module. Keep the tests passing.

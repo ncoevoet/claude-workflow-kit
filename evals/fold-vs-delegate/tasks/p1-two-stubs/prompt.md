@@ -1,0 +1,1 @@
+Implement the two stubs: shop/text.py slugify(s) (lowercase, runs of non-alphanumerics become a single "-", no leading or trailing "-") and shop/mathutil.py clamp(x, lo, hi) (raise ValueError when lo > hi). Add a unit test for each. Keep the tests passing.

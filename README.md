@@ -109,6 +109,36 @@ self-titled rather than a slice of one longer text.
    around 217k, and the gate holds the line for the 133k in between. On a smaller context
    window, scale both down together and keep the gap wide enough for several turns.
 
+## Evals — does folding actually pay?
+
+The single-loop default is a bet, and [`evals/fold-vs-delegate/`](evals/fold-vs-delegate) is
+how to check it instead of trusting it. It runs ten tasks against a small fixture repo,
+headless, under two versions of the kit's rules, and grades each run with a deterministic check
+(hidden tests, frozen files untouched, no unrequested commit):
+
+| Tasks | What they probe |
+|---|---|
+| `c1`–`c4` coupled multi-file edits | where a handoff loses detail — the case folding should win |
+| `p1`, `p2` independent modules | where parallel builders could genuinely help |
+| `i1`, `i2` investigations | compact answers from a read-heavy search |
+| `m1`, `m2` must-not-break | project rules (`legacy/` frozen, `CHANGELOG.md` off-limits) held under task pressure |
+
+```bash
+cd evals/fold-vs-delegate
+./run.sh --probe worktree                 # confirm isolation: only the variant's rules load
+./run.sh A-v0.15.0 cc54515                # old rules: the main session delegates implementation
+./run.sh B-single-loop worktree           # new rules
+./compare.py results/A-v0.15.0.jsonl results/B-single-loop.jsonl
+```
+
+Each row records pass/fail, `total_cost_usd`, `duration_ms` and `num_turns`; `compare.py`
+prints per-task pass counts and flags the tasks that flipped, marking a one-run difference as
+noise. **It costs real API money** (`EVAL_RUNS` 3 × 10 tasks × 2 variants; a dry run of one
+investigation task cost $0.07 on sonnet), so nothing here runs in CI — only the graders' shell is
+syntax- and shellcheck-tested. Isolation relies on `--setting-sources project,local`,
+`--strict-mcp-config` and `--plugin-dir`, probed on Claude Code 2.1.310; re-run `--probe` after
+an upgrade.
+
 ## Why these rules
 
 Each rule answers a failure that actually happened, not a preference:

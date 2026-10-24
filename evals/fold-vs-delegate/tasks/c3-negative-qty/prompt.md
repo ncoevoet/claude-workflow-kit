@@ -1,0 +1,1 @@
+parse_line accepts lines with a negative or zero quantity, which then produce negative order totals. Make parse_line raise ValueError for them, and make the CLI print an error to stderr and return exit code 2 instead of crashing. Keep the tests passing.

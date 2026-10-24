@@ -1,0 +1,1 @@
+Add a currency field (string, default "EUR") to Item. parse_line must accept an optional fourth column for it, and format_item must print the currency after the price, e.g. "pen x2 @ 1.5 USD". Keep the tests passing.

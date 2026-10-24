@@ -1,2 +1,4 @@
 tests/anonymization-blocklist.txt
 .claude/
+evals/fold-vs-delegate/results/
+__pycache__/

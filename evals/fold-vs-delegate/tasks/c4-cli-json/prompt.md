@@ -1,0 +1,1 @@
+Add a --json flag to the CLI: with it, main prints a JSON object {"items": [{"name", "price", "qty"}...], "total": <number>} instead of the text format. Put the JSON building in shop/formatter.py as format_order_json(items) and reuse the existing total computation. Keep the tests passing.

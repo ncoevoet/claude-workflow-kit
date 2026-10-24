@@ -30,10 +30,10 @@ if [[ -z "$pattern" ]]; then
   exit 2
 fi
 
-echo "check-anonymization: scanning skills/ + README.md against $mode"
+echo "check-anonymization: scanning skills/ + evals/ + README.md against $mode"
 # Scan only published artifacts. The blocklist files live under tests/ and are
 # never scanned, so the gate can never match its own pattern list.
-matches="$(grep -rinE "$pattern" "$ROOT/skills" "$ROOT/README.md" 2>/dev/null)"
+matches="$(grep -rinE "$pattern" "$ROOT/skills" "$ROOT/evals" "$ROOT/README.md" 2>/dev/null)"
 rc=$?
 if [[ $rc -eq 0 ]]; then
   printf '%s\n' "$matches"
