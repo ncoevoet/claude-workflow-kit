@@ -3,7 +3,13 @@
 > Loaded on demand — not part of the SessionStart payload. The one-line rules live in
 > `context/groundwork.md`; this file carries why they exist and how to apply them at the edges.
 
+## 1–2. FRAME and INTERVIEW
+
+- Never silently fill ambiguity. Converge on exact scope — do what is asked, nothing more.
+
 ## 4. SPEC
+
+- Slug: task lowercased, non-alphanumerics → `-`, trimmed and deduped.
 
 - **Why the main thread writes it.** The spec used to be delegated to a writer agent, on the theory
   that a spec living only in the main context is never re-read. The fix for that is the file on
@@ -27,6 +33,8 @@
   `## Adversarial review`, or a `Spec: none — <reason>` waiver.
 
 ## 6. BUILD
+
+- Loop on each step's `verify:` until it passes (§4) — a check run once and ignored is not a check.
 
 - **Churn-breaker.** Three edits to one file is iteration without a model of the problem. Write
   the failing test first; if you are still stuck after it, hand the failure output — not your

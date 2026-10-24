@@ -128,33 +128,43 @@ if [ "$tool" = "ExitPlanMode" ]; then
     # Nowhere opted in (neither cwd nor any named spec's owner) — stay out of the way.
     [ -n "$roots" ] || exit 0
     reason=""
-    if [ "${#namedok[@]}" -eq 0 ]; then
-        # An explicit, human-visible waiver for work that genuinely needs no spec. Tolerates
-        # markdown decoration: `**Spec:** none`, `- Spec: none`, `> Spec: none`.
-        grep -qiE '^[[:space:]>*_-]*Spec[*_]*:[*_]*[[:space:]]*none' <<<"$plan" && exit 0
-        if grep -qE '^##[[:space:]]*[Aa]dversarial[[:space:]]+[Rr]eview' <<<"$plan"; then
-            # The spec is inline: the main thread wrote it into its own plan file. Validate the
-            # plan text; record the plan file as the pointer only when it is the canonical
-            # $HOME/.claude/plans/ file, so the Edit path can re-validate it later.
+    # An explicit, human-visible waiver for work that genuinely needs no spec. Tolerates
+    # markdown decoration: `**Spec:** none`, `- Spec: none`, `> Spec: none`.
+    if [ "${#namedok[@]}" -eq 0 ] && grep -qiE '^[[:space:]>*_-]*Spec[*_]*:[*_]*[[:space:]]*none' <<<"$plan"; then
+        exit 0
+    fi
+    # Inline spec: the main thread wrote spec + review into its own plan file. It applies when the
+    # plan names no existing spec file — naming the .claude/specs/ target it will be copied to
+    # after approval (groundwork phase 4) must not turn into "names a file that does not exist".
+    if [ "${#files[@]}" -eq 0 ] && grep -qE '^##[[:space:]]*[Aa]dversarial[[:space:]]+[Rr]eview' <<<"$plan"; then
+        if ! inline=$(mktemp 2>/dev/null); then
+            echo "Plan approval blocked — cannot create a temp file to validate the inline review." >&2
+            exit 2
+        fi
+        printf '%s\n' "$plan" > "$inline"
+        validate_spec "$inline"
+        reason=${reason//$inline/the plan}
+        rm -f "$inline"
+        if [ -z "$reason" ]; then
+            # Record the plan file as the Edit pointer only when it is the canonical
+            # $HOME/.claude/plans/ file AND itself validates — the Edit path re-reads that file,
+            # not the plan text approved here.
             pf=$(jq -r '.tool_input.planFilePath // empty' <<<"$input" 2>/dev/null)
             [ -n "$pf" ] && pf=$(readlink -m "$pf" 2>/dev/null)
             case "$pf" in "$home"/.claude/plans/*.md) [ -f "$pf" ] || pf="" ;; *) pf="" ;; esac
-            inline=$(mktemp)
-            printf '%s\n' "$plan" > "$inline"
-            validate_spec "$inline"
-            reason=${reason//$inline/the plan}
-            rm -f "$inline"
-            if [ -z "$reason" ]; then
-                if [ -n "$pf" ]; then
+            if [ -n "$pf" ]; then
+                validate_spec "$pf"
+                if [ -z "$reason" ]; then
                     while IFS= read -r r; do
                         printf '%s\n' "$pf" > "$r/.claude/.spec-gate/current" 2>/dev/null || true
                     done <<<"$roots"
                 fi
-                exit 0
+                reason=""
             fi
-        else
-            reason="the plan names no spec (.claude/specs/<slug>.md), carries no inline '## Adversarial review', and has no 'Spec: none — <reason>' waiver"
+            exit 0
         fi
+    elif [ "${#namedok[@]}" -eq 0 ]; then
+        reason="the plan names no spec (.claude/specs/<slug>.md), carries no inline '## Adversarial review', and has no 'Spec: none — <reason>' waiver"
     elif [ "${#missing[@]}" -gt 0 ]; then
         reason="the plan names ${missing[0]}, which does not exist"
     else

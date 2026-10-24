@@ -10,6 +10,9 @@
 # Env: EVAL_RUNS (3) runs per task · EVAL_MODEL (sonnet) · EVAL_BUDGET_USD (1.50) cap per run ·
 #      EVAL_TIMEOUT_S (900) wall clock per run.
 #
+# Graders read the working copy, so a run that commits its work (as the kit's "commit locally
+# after each verified wave" rule says) is graded the same as one that does not.
+#
 # Isolation (probed on Claude Code 2.1.310): `--setting-sources project,local` keeps the user's
 # settings — and so their installed plugins — out; `--strict-mcp-config` drops their MCP servers;
 # `--plugin-dir` loads exactly the variant under test. The fixture's own CLAUDE.md is the only
@@ -32,15 +35,18 @@ scratch=$(mktemp -d "${TMPDIR:-/tmp}/fold-eval.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 plugin="$scratch/plugin"; mkdir -p "$plugin"
 if [ "$ref" = worktree ]; then
-    (cd "$ROOT" && git ls-files -co --exclude-standard -z | grep -zv '^evals/' | xargs -0 tar -cf - ) | tar -xf - -C "$plugin"
+    # Tracked files deleted from the worktree are skipped; untracked, non-ignored files are kept.
+    (cd "$ROOT" && git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
+        [ -e "$f" ] && printf '%s\0' "$f"; done | tar --null -T - -cf -) | tar -xf - -C "$plugin" \
+        || { echo "cannot copy the working tree" >&2; exit 65; }
 else
     git -C "$ROOT" archive "$ref" | tar -xf - -C "$plugin" || { echo "cannot archive $ref" >&2; exit 65; }
 fi
 
-claude_run() { # claude_run <workdir> <prompt> -> JSON on stdout
+claude_run() { # claude_run <workdir> <prompt> [stderr-file] -> JSON on stdout
     (cd "$1" && timeout "$TMO" claude -p --model "$MODEL" --output-format json \
         --setting-sources project,local --strict-mcp-config --plugin-dir "$plugin" \
-        --permission-mode bypassPermissions --max-budget-usd "$BUDGET" "$2" 2>/dev/null)
+        --permission-mode bypassPermissions --max-budget-usd "$BUDGET" "$2" 2>"${3:-/dev/null}")
 }
 
 if [ "$probe" = 1 ]; then
@@ -57,17 +63,19 @@ for t in "${tasks[@]}"; do
     for r in $(seq 1 "$RUNS"); do
         w="$scratch/$t-$r"; cp -r "$HERE/fixture" "$w"
         git -C "$w" init -q && git -C "$w" add -A && git -C "$w" -c user.name=eval -c user.email=eval@example.invalid commit -qm fixture
+        errf="$HERE/results/$label.$t.$r.stderr"
         json=$(claude_run "$w" "$PREAMBLE
 
-$(cat "$HERE/tasks/$t/prompt.md")"); crc=$?
+$(cat "$HERE/tasks/$t/prompt.md")" "$errf"); crc=$?
+        [ -s "$errf" ] || rm -f "$errf"
+        jq -e . >/dev/null 2>&1 <<<"$json" || json=null
         WORK="$w" FIXTURE="$HERE/fixture" TASK="$HERE/tasks/$t" bash "$HERE/tasks/$t/grade.sh"; grc=$?
         jq -cn --arg label "$label" --arg ref "$ref" --arg task "$t" --argjson run "$r" \
             --argjson crc "$crc" --argjson pass "$([ $grc = 0 ] && echo true || echo false)" \
             --argjson res "${json:-null}" \
             '{label:$label,ref:$ref,task:$task,run:$run,pass:$pass,claude_exit:$crc,
               cost_usd:($res.total_cost_usd // null),duration_ms:($res.duration_ms // null),
-              turns:($res.num_turns // null),is_error:($res.is_error)}' 2>/dev/null \
-            || jq -cn --arg task "$t" --argjson run "$r" '{task:$task,run:$run,pass:false,error:"unparseable claude output"}'
+              turns:($res.num_turns // null),is_error:($res.is_error)}'
     done
 done | tee -a "$out"
 echo "results: $out" >&2

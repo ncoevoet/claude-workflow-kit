@@ -411,6 +411,15 @@ other=$(mktemp -d); mkdir -p "$other/.claude/plans"; op="$other/.claude/plans/x.
 rm -f "$sg/.claude/.spec-gate/current"
 HOME="$fake_home" check "plan, inline via non-home plans file -> allowed, no pointer" 0 spec-gate-check.sh "$(jq -cn --arg pf "$op" --arg cwd "$sg" '{tool_name:"ExitPlanMode",tool_input:{planFilePath:$pf},cwd:$cwd}')"
 [ -f "$sg/.claude/.spec-gate/current" ] && { echo "  FAIL: non-home plans file recorded as pointer"; fail=$((fail + 1)); } || { echo "  ok: non-home plans file not recorded"; pass=$((pass + 1)); }
+# Groundwork says: write inline, copy to .claude/specs/ after approval — naming that target must not block.
+check "plan, inline + names not-yet-copied spec target -> allowed" 0 spec-gate-check.sh "$(pm "$inline_ok"$'\nAfter approval copy this spec to .claude/specs/later.md\n')"
+check "plan, inline + names existing unreviewed spec -> blocked" 2 spec-gate-check.sh "$(pm "$inline_ok"$'\nSee '"$bad")"
+# The pointer is the file the Edit path re-reads: never record an unreviewed planFilePath.
+unrev="$fake_home/.claude/plans/unreviewed.md"; printf '# Plan\n\nno review here\n' > "$unrev"
+printf '%s\n' "$hp" > "$sg/.claude/.spec-gate/current"
+HOME="$fake_home" check "inline text ok, unreviewed planFilePath -> allowed" 0 spec-gate-check.sh "$(jq -cn --arg plan "$inline_ok" --arg pf "$unrev" --arg cwd "$sg" '{tool_name:"ExitPlanMode",tool_input:{plan:$plan,planFilePath:$pf},cwd:$cwd}')"
+[ "$(cat "$sg/.claude/.spec-gate/current")" = "$hp" ] && { echo "  ok: unreviewed planFilePath not recorded, prior pointer kept"; pass=$((pass + 1)); } || { echo "  FAIL: unreviewed planFilePath overwrote the pointer"; fail=$((fail + 1)); }
+rm -f "$sg/.claude/.spec-gate/current"
 rm -rf "$fake_home" "$other"
 # Opt-in is decided first: no opt-in anywhere -> a bogus path is not our business.
 plain=$(mktemp -d)
@@ -728,7 +737,15 @@ check "added line that does not match -> allowed"  0 added-line-rules-check.sh "
 printf 'const a = 1;\n// pre-existing comment, never touched by the diff\n// main-session comment\n' > "$alr/src/a.ts"
 check "Stop, added // line -> blocked"             2 added-line-rules-check.sh "$(printf '{"hook_event_name":"Stop","stop_hook_active":false,"cwd":"%s"}' "$alr")"
 check "Stop, stop_hook_active -> allowed (no loop)" 0 added-line-rules-check.sh "$(printf '{"hook_event_name":"Stop","stop_hook_active":true,"cwd":"%s"}' "$alr")"
-check "SubagentStop ignores stop_hook_active"      2 added-line-rules-check.sh "$(printf '{"hook_event_name":"SubagentStop","stop_hook_active":true,"agent_id":"s","cwd":"%s"}' "$alr")"
+check "SubagentStop, stop_hook_active -> allowed (no loop)" 0 added-line-rules-check.sh "$(printf '{"hook_event_name":"SubagentStop","stop_hook_active":true,"agent_id":"s","cwd":"%s"}' "$alr")"
+export TMPDIR_SAVE="${TMPDIR:-}"; TMPDIR=$(mktemp -d); export TMPDIR
+stopj() { printf '{"hook_event_name":"Stop","stop_hook_active":false,"session_id":"%s","cwd":"%s"}' "$1" "$alr"; }
+check "Stop, session first sight -> blocked"       2 added-line-rules-check.sh "$(stopj s1)"
+check "Stop, same violations next turn -> allowed" 0 added-line-rules-check.sh "$(stopj s1)"
+check "Stop, other session -> blocked"             2 added-line-rules-check.sh "$(stopj s2)"
+printf 'const a = 1;\n// pre-existing comment, never touched by the diff\n// main-session comment\n// another one\n' > "$alr/src/a.ts"
+check "Stop, violation set changed -> blocked"     2 added-line-rules-check.sh "$(stopj s1)"
+rm -rf "$TMPDIR"; if [ -n "$TMPDIR_SAVE" ]; then TMPDIR="$TMPDIR_SAVE"; else unset TMPDIR; fi
 printf 'const a = 1;\n// pre-existing comment, never touched by the diff\nconst b = 2;\n' > "$alr/src/a.ts"
 
 printf 'const c = 1;\n// a bad new file\n' > "$alr/src/c.ts"

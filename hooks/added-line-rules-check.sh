@@ -14,9 +14,12 @@
 #
 # Also wired to Stop: the main session implements by default (orchestration.md), so its own
 # added lines need the same check. The scan is the working tree against HEAD either way, so it
-# covers whoever wrote the lines. On Stop, `stop_hook_active` (set when the session is already
-# continuing because of a Stop hook) lets the second stop through: one nudge, never a loop over
-# lines the user left uncommitted on purpose.
+# covers whoever wrote the lines — which is why it never insists: `stop_hook_active` (set when
+# the stopper is already continuing because of a Stop hook) lets the second stop through, on
+# both events, so a read-only refuter stopping over the main session's uncommitted lines is
+# nudged once, not looped. On Stop it also stays silent while the violation set is unchanged
+# since its last nudge in this session (state under ${TMPDIR:-/tmp}/claude-added-line/), so
+# lines the user keeps uncommitted cost one continuation, not one per turn.
 #
 # OPT-IN PER PROJECT: exits 0 (no-op) unless <root>/.claude/added-line-rules.txt exists at
 # or above the subagent's cwd. Format: one rule per line, tab-separated:
@@ -37,7 +40,7 @@ input=$(cat)
 cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null)
 [ -n "$cwd" ] || exit 0
 event=$(jq -r '.hook_event_name // empty' <<<"$input" 2>/dev/null)
-[ "$event" = "Stop" ] && [ "$(jq -r '.stop_hook_active // false' <<<"$input" 2>/dev/null)" = "true" ] && exit 0
+[ "$(jq -r '.stop_hook_active // false' <<<"$input" 2>/dev/null)" = "true" ] && exit 0
 
 # Locate the nearest ancestor of cwd carrying the rules file. The file's mere existence is
 # the opt-in signal — there is no separate marker directory to mkdir.
@@ -114,6 +117,17 @@ for rl in "${rule_lines[@]}"; do
 done
 
 [ "${#violations[@]}" -gt 0 ] || exit 0
+
+if [ "$event" = "Stop" ]; then
+    sid=$(jq -r '.session_id // empty' <<<"$input" 2>/dev/null | tr -cd 'A-Za-z0-9_-')
+    if [ -n "$sid" ]; then
+        state_dir="${TMPDIR:-/tmp}/claude-added-line"
+        mkdir -p "$state_dir" 2>/dev/null
+        sig=$(printf '%s\n' "${violations[@]}" | sha256sum | cut -d' ' -f1)
+        [ "$(cat "$state_dir/$sid" 2>/dev/null)" = "$sig" ] && exit 0
+        printf '%s\n' "$sig" > "$state_dir/$sid" 2>/dev/null
+    fi
+fi
 
 {
     echo "BLOCKED: added-line rule violation(s) in $rules — fix these before finishing:"
