@@ -9,7 +9,7 @@
     {
       "name": "workflow-kit",
       "source": "./",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "description": "Evidence-first Claude Code workflow: verification standards with claim-class proofs, a single-loop-first model where the main session implements and delegates only context-isolatable work (parallel disjoint builds, large investigations, independent verification), a 7-phase plan/spec/build methodology with adversarial spec review, a pre-commit review gate over everything changed since the last review that also blocks while verification is still running, subagent model roles, a foreground-waiting guard and builder rules (no state-changing git and project deny patterns for subagents, added-line rules for every writer) enforced by hooks, a context-size notice for expensive sessions, and the CodeGraph MCP for structural code queries.",
       "author": {
         "name": "Nicolas Coevoet",
