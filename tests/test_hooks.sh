@@ -394,6 +394,24 @@ check "plan, empty plan and no file -> blocked"    2 spec-gate-check.sh "$(pm ''
 pf=$(mktemp); printf 'Spec: %s\n' "$good" > "$pf"
 check "plan via planFilePath, reviewed spec -> allowed" 0 spec-gate-check.sh "$(jq -cn --arg pf "$pf" --arg cwd "$sg" '{tool_name:"ExitPlanMode",tool_input:{planFilePath:$pf},cwd:$cwd}')"
 rm -f "$pf"
+# Inline spec: the main thread wrote spec + review into its own plan file (no file named).
+inline_ok=$'# Plan\n\n## Steps\n1. x\n\n## Adversarial review\n\n- BLOCKER: a\n- GAP: b\n- NOTE: c\n'
+check "plan, inline reviewed spec -> allowed"      0 spec-gate-check.sh "$(pm "$inline_ok")"
+check "plan, inline thin review -> blocked"        2 spec-gate-check.sh "$(pm $'# Plan\n\n## Adversarial review\n\nlooks fine\n')"
+# The canonical home plan file becomes the Edit-path pointer; a non-home plans file never does.
+fake_home=$(mktemp -d); mkdir -p "$fake_home/.claude/plans"
+hp="$fake_home/.claude/plans/main-plan.md"; printf '%s' "$inline_ok" > "$hp"
+rm -f "$sg/.claude/.spec-gate/current"
+HOME="$fake_home" check "plan, inline via home planFilePath -> allowed" 0 spec-gate-check.sh "$(jq -cn --arg pf "$hp" --arg cwd "$sg" '{tool_name:"ExitPlanMode",tool_input:{planFilePath:$pf},cwd:$cwd}')"
+[ "$(cat "$sg/.claude/.spec-gate/current" 2>/dev/null)" = "$hp" ] && { echo "  ok: home plan file recorded as pointer"; pass=$((pass + 1)); } || { echo "  FAIL: home plan file not recorded as pointer"; fail=$((fail + 1)); }
+stash_specs=$(mktemp -d); mv "$SPEC_DIR"/*.md "$stash_specs"/ 2>/dev/null  # no fallback spec: only the pointer can open the gate
+HOME="$fake_home" WORKFLOW_SPEC_GATE_FREE_FILES=0 check "edit after inline approval -> allowed" 0 spec-gate-check.sh "$(ed "$deep/after.ts")"
+mv "$stash_specs"/*.md "$SPEC_DIR"/ 2>/dev/null; rmdir "$stash_specs"
+other=$(mktemp -d); mkdir -p "$other/.claude/plans"; op="$other/.claude/plans/x.md"; printf '%s' "$inline_ok" > "$op"
+rm -f "$sg/.claude/.spec-gate/current"
+HOME="$fake_home" check "plan, inline via non-home plans file -> allowed, no pointer" 0 spec-gate-check.sh "$(jq -cn --arg pf "$op" --arg cwd "$sg" '{tool_name:"ExitPlanMode",tool_input:{planFilePath:$pf},cwd:$cwd}')"
+[ -f "$sg/.claude/.spec-gate/current" ] && { echo "  FAIL: non-home plans file recorded as pointer"; fail=$((fail + 1)); } || { echo "  ok: non-home plans file not recorded"; pass=$((pass + 1)); }
+rm -rf "$fake_home" "$other"
 # Opt-in is decided first: no opt-in anywhere -> a bogus path is not our business.
 plain=$(mktemp -d)
 check "plan, cwd not opted in, no spec -> allowed" 0 spec-gate-check.sh "$(pm 'no spec here' "$plain")"
@@ -706,6 +724,12 @@ check_stderr "block lists file:line and the message" 2 added-line-rules-check.sh
 
 printf 'const a = 1;\n// pre-existing comment, never touched by the diff\nconst b = 2;\n' > "$alr/src/a.ts"
 check "added line that does not match -> allowed"  0 added-line-rules-check.sh "$(al sub1)"
+# Stop (main session): same scan, but stop_hook_active lets the second stop through.
+printf 'const a = 1;\n// pre-existing comment, never touched by the diff\n// main-session comment\n' > "$alr/src/a.ts"
+check "Stop, added // line -> blocked"             2 added-line-rules-check.sh "$(printf '{"hook_event_name":"Stop","stop_hook_active":false,"cwd":"%s"}' "$alr")"
+check "Stop, stop_hook_active -> allowed (no loop)" 0 added-line-rules-check.sh "$(printf '{"hook_event_name":"Stop","stop_hook_active":true,"cwd":"%s"}' "$alr")"
+check "SubagentStop ignores stop_hook_active"      2 added-line-rules-check.sh "$(printf '{"hook_event_name":"SubagentStop","stop_hook_active":true,"agent_id":"s","cwd":"%s"}' "$alr")"
+printf 'const a = 1;\n// pre-existing comment, never touched by the diff\nconst b = 2;\n' > "$alr/src/a.ts"
 
 printf 'const c = 1;\n// a bad new file\n' > "$alr/src/c.ts"
 check "untracked new file matching glob -> blocked" 2 added-line-rules-check.sh "$(al sub1)"

@@ -10,8 +10,13 @@
 # compact-gate-check.sh uses on PreCompact, changelog: "Added PreCompact hook support: hooks
 # can now block compaction by exiting with code 2") applies identically here, so a rule
 # violation is handed back to the SUBAGENT that wrote the lines, which can fix it before
-# control returns to the orchestrator. A Stop hook on the orchestrator's own thread would
-# only interrupt the orchestrator, who did not write the offending lines.
+# control returns to the main session.
+#
+# Also wired to Stop: the main session implements by default (orchestration.md), so its own
+# added lines need the same check. The scan is the working tree against HEAD either way, so it
+# covers whoever wrote the lines. On Stop, `stop_hook_active` (set when the session is already
+# continuing because of a Stop hook) lets the second stop through: one nudge, never a loop over
+# lines the user left uncommitted on purpose.
 #
 # OPT-IN PER PROJECT: exits 0 (no-op) unless <root>/.claude/added-line-rules.txt exists at
 # or above the subagent's cwd. Format: one rule per line, tab-separated:
@@ -31,6 +36,8 @@ input=$(cat)
 
 cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null)
 [ -n "$cwd" ] || exit 0
+event=$(jq -r '.hook_event_name // empty' <<<"$input" 2>/dev/null)
+[ "$event" = "Stop" ] && [ "$(jq -r '.stop_hook_active // false' <<<"$input" 2>/dev/null)" = "true" ] && exit 0
 
 # Locate the nearest ancestor of cwd carrying the rules file. The file's mere existence is
 # the opt-in signal — there is no separate marker directory to mkdir.
@@ -111,6 +118,10 @@ done
 {
     echo "BLOCKED: added-line rule violation(s) in $rules — fix these before finishing:"
     printf '  %s\n' "${violations[@]}"
-    echo "Report the fix in your final report; do not leave this for the orchestrator to clean up."
+    if [ "$event" = "Stop" ]; then
+        echo "Fix them, or say why they stay. This check runs once per stop and will not block again."
+    else
+        echo "Report the fix in your final report; do not leave this for the main session to clean up."
+    fi
 } >&2
 exit 2

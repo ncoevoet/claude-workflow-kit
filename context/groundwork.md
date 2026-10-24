@@ -33,17 +33,13 @@ phases in order before and during the change. Skip the whole flow for trivial ed
 
 ### 1. FRAME
 
-- Restate the task in one line.
-- Name the CORE PROBLEM being solved — the underlying need, not the surface request.
-- Surface assumptions explicitly; never silently fill ambiguity.
-- Apply §1: present multiple interpretations when they exist; push back if a simpler approach fits.
+- Restate the task in one line and name the CORE PROBLEM — the underlying need, not the surface request.
+- Surface assumptions; apply §1 (interpretations, push back on a simpler path).
 
 ### 2. INTERVIEW
 
-- Loop with the **AskUserQuestion** tool, **max 4 questions per call**, to lock exact scope BEFORE writing code.
-- Ask only in-depth, non-obvious questions: scope boundaries, the core problem, key technical/UX decisions, trade-offs, edge cases.
-- Offer the simplest sound default as the first option of each question and mark it Recommended.
-- Stop the moment further questions would be obvious or speculative. Converge on exact scope — do what's asked, nothing more.
+- Loop with **AskUserQuestion** (max 4 questions per call) to lock exact scope BEFORE writing code — only in-depth, non-obvious questions: scope boundaries, key technical/UX decisions, trade-offs, edge cases.
+- Simplest sound default first, marked Recommended. Stop once further questions would be obvious or speculative.
 
 ### 3. PLAN
 
@@ -53,79 +49,46 @@ phases in order before and during the change. Skip the whole flow for trivial ed
 
 ### 4. SPEC
 
-- Spawn a **dedicated sub-agent** (Agent/Task tool), a Researcher-class spawn (sonnet), to write the implementation spec. The main thread does not write it.
-- This holds **even when the main thread just did the exploration itself** and feels faster writing it. Skipping it is the common failure: the spec then lives only in the main thread's context, where it is never re-read, and the plan file becomes a running narrative instead of a checkable artifact. Hand the sub-agent your exploration findings; that is what the reference file's prompt is for.
-- Target file: `.claude/specs/<slug>.md` in the current repo. Slug = task lowercased, non-alphanumerics → `-`, trimmed, deduped; append `-2`, `-3` if a file already exists.
-- The sub-agent writes ONLY that one file and builds NO source.
-- Per step the spec records: description · key decision · chosen default · verify method · affected files.
-- Prompt, adversarial-reviewer prompt, spec skeleton and field rules:
-  `@@KIT@@/context/reference/spec-template.md` — read it when you reach this phase.
-- **Adversarial spec review (before GATE).** Spawn a SECOND, independent sub-agent (opus — the
-  Refuter role) that has NOT seen the exploration or the spec-writer's context: it gets the
-  original task, the locked decisions and the spec path, with read access to the tree. Its
-  charter is to prove the spec incomplete across six categories — requirements no step covers,
-  affected files the steps omit (check callers/consumers of everything touched), `verify:` checks
-  that cannot fail, unhandled edge/error paths, premises the tree contradicts, step-to-step
-  contracts that don't line up. It returns findings only (BLOCKER / GAP / NOTE, each with
-  evidence) and edits nothing. The main thread adjudicates, patches the spec, records the
-  adjudicated findings under a final `## Adversarial review` section — or "none found" plus the
-  six checks run — and only then proceeds to GATE. One pass; re-check only the fixes, no
-  adversary/writer ping-pong. In plan mode the spec-writer can only write its own plan file
-  (`~/.claude/plans/*-agent-*.md`): resume it (SendMessage) to append the adjudicated review,
-  then copy the spec to `.claude/specs/` after approval. Hook-enforced (`spec-gate-check.sh`) in repos that opt in with
-  `mkdir -p .claude/.spec-gate`.
+- **The main thread writes the spec itself**, from its own exploration — handing it to a writer
+  agent only re-transmits that context, lossily. Target: `.claude/specs/<slug>.md` (slug = task
+  lowercased, non-alphanumerics → `-`, deduped; `-2`, `-3` on collision). In plan mode, write it
+  into the session's plan file and copy it to `.claude/specs/` after approval.
+- Per step: description · key decision · chosen default · verify method · affected files.
+- **Adversarial spec review (before GATE).** An independent opus subagent (Refuter role) that has
+  NOT seen your exploration tries to prove the spec incomplete across six categories; you
+  adjudicate, patch, and record the outcome under a final `## Adversarial review` section — or
+  "none found" plus the six checks run. One pass. Hook-enforced (`spec-gate-check.sh`) in repos
+  that opt in with `mkdir -p .claude/.spec-gate`.
+- Skeleton, field rules and the adversary prompt: `@@KIT@@/context/reference/spec-template.md`.
 
 ### 5. GATE
 
-- Call **ExitPlanMode** to present the plan for explicit user approval.
-- HARD GATE: edit no file until the user approves.
-- In opt-in repos `ExitPlanMode` is hook-enforced from the plan text: name the spec path in the
-  plan (or `Spec: none — <reason>`); approval is refused until it exists with its
-  `## Adversarial review` section.
-- This *uses* native `ExitPlanMode` as its gate — it does not replace native plan mode.
+- Call **ExitPlanMode** for explicit approval; edit no file until the user approves. In opt-in
+  repos the plan must name its spec, carry its own `## Adversarial review`, or say
+  `Spec: none — <reason>`.
 
 ### 6. BUILD
 
-- Only after approval, implement the plan steps in order.
-- For each step, run its `verify:` check before starting and again after finishing — verify before you build — looping until it passes (§4).
-- Keep changes surgical (§3): every changed line traces to a spec step.
+- Implement the plan steps in order, in the main session; run each step's `verify:` before and
+  after; every changed line traces to a spec step (§3).
 - **Churn-breaker:** a 3rd edit of the same file in one session means the approach is wrong —
-  stop iterating, reproduce with a failing test, and hand the failure output to a specialist
-  subagent (test-specialist / bug-detective) with an exclusive file list; never attempt edit #4
-  on the main thread.
+  stop and reproduce with a failing test before edit #4.
 - **Delegation threshold:** an investigation expected to exceed ~30 tool calls or read >10 files
-  runs in a subagent (model pinned per the role table in verification-standards.md) that
-  returns the diagnosis only; the main thread keeps the plan and the integrated view.
-
-**Fanning out to parallel agents** — exclusive file lists, the stale-brief warning, the
-forbidden git verbs, the failing-first evidence rule: `@@KIT@@/context/reference/parallel-agents.md`.
-Verify each agent's claims yourself, ideally by breaking something *different* from what it
-reported. Reports are evidence, not proof.
+  runs in a subagent (model pinned per the role table in `orchestration.md`) that returns the
+  diagnosis only.
+- Parallel fan-out rules: `@@KIT@@/context/reference/parallel-agents.md`.
 
 ### 7. REVIEW
 
-- For any multi-file or multi-agent change, run an **independent review of the integrated
-  diff** before shipping. Fix CRITICAL/IMPORTANT findings, then re-run the static gates —
-  tests wait for the pre-push hook. The reviewer re-runs those gates itself, rather than
-  reading the builder's report of them.
-- Per-step `verify:` checks prove each step did what it said. They cannot see a contract
-  that two steps agreed on wrongly, or a safety promise a docstring makes and the code
-  breaks. A change once passed every gate — full suites, lint, typecheck — while
-  containing a bug that destroyed files the user had explicitly kept; only reading the
-  integrated whole found it.
-- One pass is not enough on a large diff, and the review's own findings need the same
-  scepticism as any other agent's.
+- Any multi-file change gets an **independent review of the integrated diff** (refuter) before
+  shipping; fix CRITICAL/IMPORTANT, re-run the static gates.
+
+Rationale, worked failures and the plan-mode details for phases 4–7:
+`@@KIT@@/context/reference/build-phases.md` — read it when you reach SPEC.
 
 ## Compaction — checkpoint before the context is cut
 
-Auto-compaction fires on the harness's clock, not on a task boundary. Left alone it lands
-mid-edit and takes with it every piece of working state that lived only in reasoning.
-
-In a repository with a `.claude/.compact-gate/` directory the gate inverts that: automatic
-compaction is **blocked** until this session has written a checkpoint, and the `SessionStart`
-hook names the file to write — one per session, so sessions sharing a working directory do not
-race. Write it when the work is durable — spec on disk, edits saved, sub-agent results
-integrated, nothing that matters living only in your reasoning — never mid-edit. Then make one
-more small tool call: `PreCompact` only runs on the next compaction attempt, so a session that
-checkpoints and goes quiet is never compacted at all. Rewrite it every time; the gate compares
-its mtime against the last compaction it let through.
+In a repository with `.claude/.compact-gate/`, automatic compaction is blocked until this session
+writes the checkpoint file the `SessionStart` hook named. Write it only when the work is durable
+(spec on disk, edits saved, results integrated), then make one more small tool call. Details:
+`@@KIT@@/context/reference/compaction.md`.

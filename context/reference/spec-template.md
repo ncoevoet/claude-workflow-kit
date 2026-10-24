@@ -1,19 +1,9 @@
-# SPEC phase — sub-agent prompt and template
+# SPEC phase — template and adversary prompt
 
 > Loaded on demand — not part of the SessionStart payload. Read it when you enter the SPEC
 > phase of `groundwork.md`.
 
-The sub-agent writes ONE file: the SPEC-phase target spec file (`.claude/specs/<slug>.md`; in plan mode its agent plan file `~/.claude/plans/*-agent-*.md`, copied to `.claude/specs/` after approval). It builds no source. The plan must name that path — the ExitPlanMode gate reads it from the plan text.
-
-### Sub-agent prompt (use verbatim; fill `<task>`, `<spec-file>`, and the locked decisions)
-
-> Write an implementation spec to `<spec-file>` (create the file and its parent
-> directory if missing). Do not edit any other file. Do not build.
-> For the task "`<task>`" and these locked decisions from the interview:
-> `<decisions>` — produce the spec using the skeleton below. For EACH step state:
-> description, key decision, chosen default (and why), verify method, affected files.
-> Be surgical (§3): no speculative scope, no abstractions for single-use code.
-> Return the spec as your final message after writing the file.
+The main thread writes ONE file: `.claude/specs/<slug>.md` — or, in plan mode, the session's plan file (copied to `.claude/specs/` after approval). It builds no source while writing it. For each step: description, key decision, chosen default (and why), verify method, affected files. The plan must name the spec path or carry the spec inline — the ExitPlanMode gate reads the plan text.
 
 ### Adversarial reviewer prompt (use verbatim; fill `<task>`, `<spec-file>`, `<decisions>`; model: opus — the Refuter role)
 

@@ -6,23 +6,20 @@
 
 | Model | Role | Job |
 |---|---|---|
-| fable | Orchestrator | plans, writes specs, spawns agents, judges reports, integrates |
+| fable | Main session | plans, writes specs, implements, integrates, judges reports |
 | haiku | Scout | locates files, symbols, call sites — reports locations, not file dumps |
 | sonnet | Researcher | reads docs/source, reports facts, marks anything it could not verify UNVERIFIED |
-| sonnet | Builder | codes from a spec, runs the tests |
+| sonnet | Builder | codes one disjoint file set from a spec, in parallel with others |
 | opus | Refuter | reviews the diff, re-runs the tests itself |
 | opus | Debugger | harder root-cause work only |
 
-`fable` names the orchestrator itself, not a pinnable subagent model — the hook rejects it on a spawn.
+`fable` names the main session itself, not a pinnable subagent model — the hook rejects it on a spawn.
 
 Agent types: Scout = `workflow-kit:scout`, Builder = `workflow-kit:builder`, Refuter =
 `workflow-kit:refuter`. Prefer them over `general-purpose`: their tool list excludes `Agent`/`Task`,
 so nesting is impossible rather than merely forbidden.
 
-**One level of subagents — no nesting.** Only the main session spawns agents. Every brief states:
-"Do the work yourself; do NOT spawn sub-agents or background agents." A nested agent is invisible
-in the user's agent panel, and its parent exits early and looks stalled — killing that parent
-kills the real work with it.
+**One level of subagents — no nesting.** Only the main session spawns agents; every brief states "Do the work yourself; do NOT spawn sub-agents or background agents." A nested agent is invisible in the agent panel, and killing its stalled-looking parent kills the work.
 
 **Every agent returns:** the commands it ran, test counts (files and tests), and pass/fail with the
 exit code of each. **Report no status you have not read in the agent's own output** — not from
@@ -31,23 +28,24 @@ completion notification or `.claude/.scratch/agents/<id>.json` (written by `agen
 
 **Scratch-file handoff.** An agent whose result is large writes it to
 `.claude/.scratch/<slug>.md` and returns the path plus a short summary; the next agent
-reads the file. Bulk text never enters the orchestrator's context.
+reads the file. Bulk text never enters the main session's context.
 
-**Refuter.** The reviewing agent re-runs the builder's static gates itself (typecheck, lint):
-a builder's "done" is a claim, and per the Tooling row of the claim-class table in
-`verification-standards.md`, a Tooling claim needs a command the claimant ran. It runs no
-test suite — tests belong to the pre-push hook (Gate cadence below).
+**Refuter.** Re-runs the static gates itself (typecheck, lint) — a builder's "done" is a Tooling claim, which needs a command the claimant ran. It runs no test suite.
 
-## Orchestration — the main session delegates implementation
+## Single loop first — delegate by context, not by role
 
-- **The main session is an orchestrator: it plans, delegates, verifies and integrates. It does not write feature code itself.** Implementation goes to a subagent, pinned to a model per the role table above.
-- Brief each implementation agent with: the specific goal · exact files or URLs in scope · what it may change · what it must verify · what it must not do · the required output format · an output limit · what is already known (so it does not rediscover it). Agents whose file sets overlap are sequenced, never parallel.
+- **The main session implements by default.** One context that plans, builds and integrates beats a chain of agents handing summaries to each other: every handoff is lossy, adds a nested loop's latency, and tightly coupled steps degrade across it. Work that chains on another step's output, touches the same files, or is usually done together stays in one context.
+- **Delegate only work whose context can be isolated** — it needs little from the rest of the session and returns a compact result:
+  1. **Parallel builders on disjoint file sets** — independent pieces that genuinely run at once. Overlapping file sets are sequenced, never parallel.
+  2. **Investigations over the delegation threshold** (~30 tool calls or >10 files) — a Scout or Researcher returns the diagnosis, not the file dumps.
+  3. **Independent verification** — refuter, adversarial spec review, debugger on a reproduced failure. A fresh context that has not seen your reasoning is the point.
+- **Keep a delegation only if it measures better.** When unsure whether a split pays, the folded version is the default; `@@KIT@@/evals/fold-vs-delegate/` compares the two on cost, latency and outcome.
+- When you do delegate, brief the agent with: the specific goal · exact files or URLs in scope · what it may change · what it must verify · what it must not do · the required output format · an output limit · what is already known (so it does not rediscover it).
 - **Verify the task's premise before spending an expensive agent loop on it.** A cheap, direct check against the real system (a curl call, a query, reading the actual file) up front is far cheaper than an authoring pass, a judging pass and a re-scope cycle discovering the premise was wrong. Put the premise check as step 0 of the brief, not as something the agent discovers on its own.
-- **Subagents never run state-changing git** — `add`, `commit`, `push`, `stash`, `checkout`, `restore`, `reset`, `rebase`, `merge`, `cherry-pick`, `switch`, `clean` — nor write the orchestrator's compaction checkpoint (`.claude/.compact-gate/**`). The orchestrator owns git state and hands over a clean index. Hook-enforced (`subagent-guard.sh`) by detecting the subagent-only `agent_id` field on the hook payload — this is not prose alone, because prose alone was broken: a builder once ran a project's translation-regenerating npm script followed by a destructive git checkout, silently discarding a sibling agent's uncommitted work. A project can deny additional command patterns via `.claude/subagent-deny.txt` (one ERE per line).
-- **Verifiers and judges run against a frozen build — a static build or a deployed target — never the hot-reloading dev server a builder is actively editing.** A builder's in-progress TypeScript error surfaces as an overlay that intercepts the verifier's clicks and produces a false FAIL; a passing check that was actually looking at someone else's mid-edit state is not a check.
-- **Gate cadence.** Per wave: the static gates (typecheck, lint, architecture) **in parallel**, on a tree no builder is currently editing, then the commit gate's review. **Tests run in the pre-push hook, never per wave or per commit** — a suite costs minutes on every commit, and a run on a moving tree is stale the moment the next builder edits a file. The one exception is a builder running the spec it is writing or fixing, to see it fail then pass. A repository with no test step in its pre-push hook runs the suite once, just before `git push`. **Commit locally after each verified wave** — this is not pushing, and does not require push approval; it turns a wave's result into a `git show` away instead of something reconstructed from transcripts if a later step goes wrong.
-- The orchestrator still does the work only it can: building the brief, resolving merge conflicts, judging what came back, running the gates, and recording the change.
-- Exception — implement inline only when delegating costs more than doing: a single-line edit, or a fix already fully diagnosed and expressible as one concrete edit. "It would be faster if I just did it" is not that exception.
+- **Subagents never run state-changing git** (`add`, `commit`, `push`, `stash`, `checkout`, `restore`, `reset`, `rebase`, `merge`, `cherry-pick`, `switch`, `clean`) nor write the compaction checkpoint (`.claude/.compact-gate/**`) — hook-enforced by `subagent-guard.sh`; extra patterns via `.claude/subagent-deny.txt`. The main session owns git state.
+- **Verifiers run against a frozen build** (static build or deployed target), never a hot-reloading dev server someone is editing.
+- **Gate cadence.** Per wave: static gates (typecheck, lint, architecture) in parallel on a tree nobody is editing, then the commit gate's review; **commit locally after each verified wave**. **Tests run in the pre-push hook**, not per wave — except the spec you are writing or fixing, run to see it fail then pass; no pre-push test step → run the suite once before `git push`.
+- Rationale and incidents behind these three rules: `@@KIT@@/context/reference/delegation.md`.
 
 ## Refuter — standing checklist
 
@@ -57,10 +55,7 @@ patterns are cheaper to check for by habit than to rediscover per review.
 
 ## Waiting — never spend the main thread on it
 
-- **Never block a foreground Bash call on a condition or a deadline** (hook-enforced by `bash-guard.sh`). Such a loop holds the main thread for its whole duration and cannot be interrupted; the identical loop with `run_in_background: true` costs nothing and fires one completion notification the moment it exits. **Monitor** gives one notification *per occurrence* — each CI step, each matching log line — for external state the harness cannot see. Settling delays under 10s outside a loop stay allowed.
-- **A subagent never ends its turn just to wait.** Each interim stop ("Waiting.") wakes the orchestrator, which re-reads its whole context to answer nothing — one session spent ~40 such turns. A subagent runs its own long commands in the foreground (bounded by `timeout`) and ends its turn once, with the final report. Work that serialises on a shared lock gets one agent, batch after batch, never N agents queueing on it.
-- **Never poll something the harness already tracks.** Subagents and background commands send their own completion notifications; a `date`/`sleep` loop waiting on one is pure waste.
-- **A bounded polling loop is not a completion signal.** `for i in $(seq 1 N); do … break …; sleep 10; done` falls through when its budget runs out, and the line after it prints the same banner either way. What proves the run finished is the process's own exit code — never the loop's.
-- **Every wait on a process is time-bounded — no exceptions** (hook-enforced by `bash-guard.sh`, both foreground and `run_in_background`). An unbounded `while pgrep …; do sleep N; done` can hang forever: `pgrep -f` matches against the *whole* command line of every process, including the wait loop's own — a `[v]` bracket trick only stops the pattern matching its own literal text, not a plain occurrence elsewhere on the same line (e.g. a later `npx vitest`). Bound it with `timeout N …`, or a counted loop with a `break`; match a string the waiting command's own line cannot contain (e.g. `ps -eo args | grep -E '/node_modules/\.bin/vitest( |$)'`); or, best of all, wait on the process's own exit via `run_in_background` instead of polling for it.
-- **A background wait that never exits never notifies.** `run_in_background` fires its one completion notification when the command exits — a hung loop just sits there silently, and nothing wakes the orchestrator until the user notices. Arm a Monitor watchdog (emit when a script's elapsed time exceeds N minutes) for anything that can hang.
-- **A shared-resource wait can starve, not just hang.** Waiting for "no matching process" can stay unsatisfied forever if another workspace keeps launching the same command back-to-back. Bound the wait and proceed (fail loudly) rather than assuming the resource will eventually free up.
+- **Never block a foreground Bash call on a condition or a deadline** (hook-enforced by `bash-guard.sh`): use `run_in_background: true` for one completion notification, **Monitor** for one per occurrence. Settling delays under 10s outside a loop stay allowed.
+- **Never poll what the harness already tracks**, and **a subagent never ends its turn just to wait** — it runs long commands in the foreground under `timeout` and reports once.
+- **Every wait on a process is time-bounded** (hook-enforced, foreground and background); a bounded loop falling through is not a completion signal — the process's own exit code is.
+- Details, the `pgrep -f` self-match trap, watchdogs and starvation: `@@KIT@@/context/reference/waiting.md` — read it before writing any wait.

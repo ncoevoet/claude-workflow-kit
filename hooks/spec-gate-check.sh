@@ -15,8 +15,8 @@
 # ExitPlanMode is gated from the PLAN TEXT, not from prior edits: in plan mode the session has
 # edited nothing yet, so an edit-based trigger never fires. The plan must name a fresh spec
 # (`.claude/specs/*.md` under an opted-in repo, or a plan-mode agent file
-# `~/.claude/plans/*-agent-*.md`) carrying a reviewed `## Adversarial review`, or declare
-# `Spec: none — <reason>`.
+# `~/.claude/plans/*-agent-*.md`) carrying a reviewed `## Adversarial review`, carry that section
+# inline (the main thread's own plan file), or declare `Spec: none — <reason>`.
 set -u
 [ "${WORKFLOW_SPEC_GATE:-}" = "off" ] && exit 0
 # Without jq every field below reads empty; fail open rather than block on a parsing gap.
@@ -132,7 +132,29 @@ if [ "$tool" = "ExitPlanMode" ]; then
         # An explicit, human-visible waiver for work that genuinely needs no spec. Tolerates
         # markdown decoration: `**Spec:** none`, `- Spec: none`, `> Spec: none`.
         grep -qiE '^[[:space:]>*_-]*Spec[*_]*:[*_]*[[:space:]]*none' <<<"$plan" && exit 0
-        reason="the plan names no spec (.claude/specs/<slug>.md) and carries no 'Spec: none — <reason>' waiver"
+        if grep -qE '^##[[:space:]]*[Aa]dversarial[[:space:]]+[Rr]eview' <<<"$plan"; then
+            # The spec is inline: the main thread wrote it into its own plan file. Validate the
+            # plan text; record the plan file as the pointer only when it is the canonical
+            # $HOME/.claude/plans/ file, so the Edit path can re-validate it later.
+            pf=$(jq -r '.tool_input.planFilePath // empty' <<<"$input" 2>/dev/null)
+            [ -n "$pf" ] && pf=$(readlink -m "$pf" 2>/dev/null)
+            case "$pf" in "$home"/.claude/plans/*.md) [ -f "$pf" ] || pf="" ;; *) pf="" ;; esac
+            inline=$(mktemp)
+            printf '%s\n' "$plan" > "$inline"
+            validate_spec "$inline"
+            reason=${reason//$inline/the plan}
+            rm -f "$inline"
+            if [ -z "$reason" ]; then
+                if [ -n "$pf" ]; then
+                    while IFS= read -r r; do
+                        printf '%s\n' "$pf" > "$r/.claude/.spec-gate/current" 2>/dev/null || true
+                    done <<<"$roots"
+                fi
+                exit 0
+            fi
+        else
+            reason="the plan names no spec (.claude/specs/<slug>.md), carries no inline '## Adversarial review', and has no 'Spec: none — <reason>' waiver"
+        fi
     elif [ "${#missing[@]}" -gt 0 ]; then
         reason="the plan names ${missing[0]}, which does not exist"
     else
@@ -168,7 +190,7 @@ if [ "$tool" = "ExitPlanMode" ]; then
         exit 0
     fi
     echo "Plan approval blocked — $reason." >&2
-    echo "Groundwork phase 4 (SPEC) runs before phase 5 (GATE): a dedicated sub-agent writes .claude/specs/<slug>.md (in plan mode: its agent plan file), then a second, independent opus adversary reviews it. Name that path in the plan." >&2
+    echo "Groundwork phase 4 (SPEC) runs before phase 5 (GATE): the main thread writes .claude/specs/<slug>.md (in plan mode: inline in its plan file), then an independent opus adversary reviews it. Name that path in the plan, or keep the spec inline." >&2
     echo "Record the adjudicated findings in the spec under '## Adversarial review' — either BLOCKER/GAP/NOTE entries, or 'none found' plus the 6 checks you ran (list items or table rows both count)." >&2
     echo "Work that genuinely needs no spec: put 'Spec: none — <reason>' on its own line in the plan. To disable the gate for a session, set WORKFLOW_SPEC_GATE=off." >&2
     exit 2
@@ -222,10 +244,11 @@ if [ -f "$pointer" ]; then
     if [ "$age" -le "$TTL_MIN" ]; then
         cand=$(head -1 "$pointer" 2>/dev/null)
         # The pointer may live under this root, under an ancestor root (nested opt-in), or be a
-        # plan-mode agent file under ~/.claude/plans; anything else is not ours to trust.
+        # plan-mode file under ~/.claude/plans (only this hook writes the pointer, after validating
+        # it); anything else is not ours to trust.
         ok=0
         cand=$(readlink -m "$cand" 2>/dev/null)
-        case "$cand" in "$root"/*|"$home"/.claude/plans/*-agent-*.md) ok=1 ;; esac
+        case "$cand" in "$root"/*|"$home"/.claude/plans/*.md) ok=1 ;; esac
         if [ "$ok" = 0 ]; then
             a=$(dirname "$root")
             while :; do
@@ -267,7 +290,7 @@ fi
 
 # --- block (Edit|Write only; ExitPlanMode blocks above) ---------------------------------
 echo "Edit blocked — $reason." >&2
-echo "This is file $n+ in the last ${WINDOW_MIN}m, so it is not a trivial edit. Groundwork phase 4 (SPEC): a dedicated sub-agent writes $root/.claude/specs/<slug>.md, then a second, independent opus adversary reviews it." >&2
+echo "This is file $n+ in the last ${WINDOW_MIN}m, so it is not a trivial edit. Groundwork phase 4 (SPEC): the main thread writes $root/.claude/specs/<slug>.md, then an independent opus adversary reviews it." >&2
 echo "Record the adjudicated findings in the spec under '## Adversarial review' — either BLOCKER/GAP/NOTE entries, or 'none found' plus the 6 checks you ran (list items or table rows both count)." >&2
 echo "Slug = task lowercased, non-alphanumerics -> '-'. To disable the gate for a session, set WORKFLOW_SPEC_GATE=off." >&2
 exit 2
