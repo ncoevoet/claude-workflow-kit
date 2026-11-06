@@ -22,6 +22,12 @@ ROLES='  haiku  = Scout      (locate: files, symbols, call sites)
   opus   = Debugger   (root-cause only)'
 case "$model" in
     haiku|sonnet|opus)
+        # Non-blocking nudge: a general-purpose (or untyped) spawn can nest further agents.
+        # Never a block — other plugins (review-all) legitimately spawn general-purpose agents.
+        if [ -z "$subtype" ] || [ "$subtype" = "general-purpose" ]; then
+            msg="workflow-kit: this spawn uses ${subtype:-no subagent_type} (general-purpose), which can spawn nested agents. Prefer workflow-kit:builder (edit + run its spec), workflow-kit:refuter (review, re-run checks) or workflow-kit:scout (read-only locate) — their tool lists exclude Agent/Task, so they cannot nest. Not blocked; proceed if general-purpose is really needed."
+            jq -cn --arg m "$msg" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$m}}' 2>/dev/null || true
+        fi
         exit 0
         ;;
     fable)

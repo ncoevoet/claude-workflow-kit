@@ -94,6 +94,34 @@ check_stderr "fable message names the orchestrator" 2 agent-model-pin.sh \
     '{"tool_input":{"model":"fable"}}' \
     "fable is the orchestrator's model"
 check_no_jq "valid payload allowed without jq" 0 agent-model-pin.sh '{"tool_input":{"model":"haiku"}}'
+# Non-blocking nudge toward the typed agents: exit 0, PreToolUse additionalContext on stdout.
+# check_stdout <name> <hook> <json> <substring-or-empty> — exit must be 0; an empty needle
+# asserts stdout is empty.
+check_stdout() {
+    local name="$1" hook="$2" json="$3" needle="$4" got out
+    out=$(printf '%s' "$json" | "$HOOKS/$hook" 2>/dev/null)
+    got=$?
+    if [ "$got" != 0 ]; then
+        fail=$((fail + 1)); echo "  FAIL: $name (want exit 0, got $got)"
+    elif [ -z "$needle" ] && [ -n "$out" ]; then
+        fail=$((fail + 1)); echo "  FAIL: $name (expected no stdout, got '$out')"
+    elif [ -n "$needle" ] && ! jq -e --arg n "$needle" '.hookSpecificOutput.hookEventName == "PreToolUse" and (.hookSpecificOutput.additionalContext | contains($n))' <<<"$out" >/dev/null 2>&1; then
+        fail=$((fail + 1)); echo "  FAIL: $name (stdout lacks additionalContext '$needle': '$out')"
+    else
+        pass=$((pass + 1)); echo "  ok: $name"
+    fi
+}
+check_stdout "general-purpose spawn nudged, not blocked" agent-model-pin.sh \
+    '{"tool_input":{"subagent_type":"general-purpose","model":"sonnet"}}' "workflow-kit:builder"
+check_stdout "untyped spawn nudged, not blocked"         agent-model-pin.sh \
+    '{"tool_input":{"model":"opus"}}' "workflow-kit:scout"
+check_stdout "nudge names refuter and cannot-nest"       agent-model-pin.sh \
+    '{"tool_input":{"model":"haiku"}}' "cannot nest"
+check_stdout "typed builder spawn gets no nudge"         agent-model-pin.sh \
+    '{"tool_input":{"subagent_type":"workflow-kit:builder","model":"sonnet"}}' ""
+check_stdout "other plugin's typed agent gets no nudge"  agent-model-pin.sh \
+    '{"tool_input":{"subagent_type":"Explore","model":"haiku"}}' ""
+check "general-purpose without model still blocked" 2 agent-model-pin.sh '{"tool_input":{"subagent_type":"general-purpose"}}'
 
 echo
 echo "== bash-guard.sh =="
@@ -107,6 +135,77 @@ check "plain command is allowed"              0 bash-guard.sh "{\"tool_input\":{
 check "symbol grep blocked when indexed"      2 bash-guard.sh "{\"tool_input\":{\"command\":\"$symbol_grep\"},\"cwd\":\"$tmp_cg\"}"
 check "symbol grep allowed when not indexed"  0 bash-guard.sh "{\"tool_input\":{\"command\":\"$symbol_grep\"},\"cwd\":\"$tmp_plain\"}"
 check "literal multi-word grep allowed"       0 bash-guard.sh "{\"tool_input\":{\"command\":\"$literal_grep\"},\"cwd\":\"$tmp_cg\"}"
+
+# Recursive grep: per-path index resolution, docs/config exemptions, regex patterns allowed.
+# bg <name> <exit> <command> <cwd> — command is JSON-encoded by jq, so quotes need no escaping.
+guard() { check "$1" "$2" bash-guard.sh "$(jq -nc --arg c "$3" --arg d "$4" '{tool_input:{command:$c},cwd:$d}')"; }
+guard_err() { check_stderr "$1" "$2" bash-guard.sh "$(jq -nc --arg c "$3" --arg d "$4" '{tool_input:{command:$c},cwd:$d}')" "$5"; }
+S="time""out"
+guard "unquoted symbol grep over src blocked when indexed"   2 "$G -rn $S src"                       "$tmp_cg"
+guard "symbol grep over a path outside any index allowed"   0 "$G -rn $S $tmp_plain"                "$tmp_cg"
+guard "symbol grep over ~/.claude/skills path allowed"     0 "$G -rn $S ~/.claude/skills/ship"     "$tmp_cg"
+guard "symbol grep over a .claude dir allowed"             0 "$G -rn $S apps/ng/.claude/patterns"  "$tmp_cg"
+guard "symbol grep over *.md glob allowed"                 0 "$G -rn $S docs/*.md"                 "$tmp_cg"
+guard "symbol grep over json/yml/yaml files allowed"       0 "$G -rn $S a.json b.yml c.yaml"       "$tmp_cg"
+guard "symbol grep over md + src still blocked"            2 "$G -rn $S README.md src"             "$tmp_cg"
+guard "symbol grep from unindexed cwd into indexed dir blocked" 2 "$G -rn $S $tmp_cg/src"          "$tmp_plain"
+guard "regex pattern with parens allowed"                  0 "$G -rn 'type(scope)' src"            "$tmp_cg"
+guard "regex pattern with alternation allowed"             0 "$G -rn 'foo|bar' src"                "$tmp_cg"
+guard "regex pattern with backslash allowed"               0 "$G -rn 'foo\\.bar' src"              "$tmp_cg"
+guard "symbol given with -e blocked"                       2 "$G -rn -e $S src"                    "$tmp_cg"
+guard "chained symbol grep blocked"                        2 "ls && $G -rn $S src"                 "$tmp_cg"
+guard "non-recursive symbol grep allowed"                  0 "$G -n $S src/a.ts"                   "$tmp_cg"
+guard_err "symbol grep message names codegraph_explore"    2 "$G -rn $S src" "$tmp_cg" "codegraph_explore"
+err=$(printf '%s' "$(jq -nc --arg c "$G -rn $S src" --arg d "$tmp_cg" '{tool_input:{command:$c},cwd:$d}')" | "$HOOKS/bash-guard.sh" 2>&1 >/dev/null)
+if grep -qE 'codegraph_(search|callers|node)' <<<"$err"; then
+    fail=$((fail + 1)); echo "  FAIL: symbol grep message still names a removed codegraph tool"
+else
+    pass=$((pass + 1)); echo "  ok: symbol grep message names no removed codegraph tool"
+fi
+
+# Main-session git safety: force push and blanket staging blocked; normal push/add allowed.
+P="git pu""sh"; A="git a""dd"
+guard "push -f blocked"                         2 "$P -f origin main"                    "$tmp_plain"
+guard "push --force blocked"                    2 "$P --force"                           "$tmp_plain"
+guard "push --force-with-lease blocked"         2 "$P --force-with-lease origin br"      "$tmp_plain"
+guard "push --force-with-lease=ref blocked"     2 "$P --force-with-lease=br origin br"   "$tmp_plain"
+guard "push +refspec blocked"                   2 "$P origin +br"                        "$tmp_plain"
+guard "push -fu cluster blocked"                2 "$P -fu origin br"                     "$tmp_plain"
+guard "push -uf cluster blocked"                2 "$P -uf origin br"                     "$tmp_plain"
+guard "push -C dir --force blocked"             2 "git -C /tmp/x pu""sh --force"         "$tmp_plain"
+guard "chained && push -f blocked"              2 "git status && $P -f"                  "$tmp_plain"
+guard "chained ; push --force blocked"          2 "git fetch; $P --force"                "$tmp_plain"
+guard "plain push allowed"                      0 "$P"                                   "$tmp_plain"
+guard "push -u origin br allowed"               0 "$P -u origin br"                      "$tmp_plain"
+guard "push -o value containing f allowed"      0 "$P -o ci.skip-foo origin br"          "$tmp_plain"
+guard "add -A blocked"                          2 "$A -A"                                "$tmp_plain"
+guard "add --all blocked"                       2 "$A --all"                             "$tmp_plain"
+guard "add . blocked"                           2 "$A ."                                 "$tmp_plain"
+guard "add -C dir . blocked"                    2 "git -C /tmp/x a""dd ."                "$tmp_plain"
+guard "chained add -A && commit blocked"        2 "$A -A && git commit -m x"             "$tmp_plain"
+guard "add path/file allowed"                   0 "$A path/file.ts"                      "$tmp_plain"
+guard "add ./src/x.ts allowed"                  0 "$A ./src/x.ts"                        "$tmp_plain"
+guard "add -p path allowed"                     0 "$A -p src/x.ts"                       "$tmp_plain"
+guard "quoted force-push text allowed"          0 "echo '$P --force'"                    "$tmp_plain"
+guard "force-push text in a commit message allowed" 0 "git commit -m 'never $P -f'"      "$tmp_plain"
+guard "push --mirror blocked"                2 "$P --mirror origin"                   "$tmp_plain"
+guard "heredoc body with push -f allowed"    0 "cat > f <<EOF
+$P -f
+EOF"                                                                                   "$tmp_plain"
+guard "quoted heredoc body with add . allowed" 0 "cat <<'EOF'
+$A .
+EOF"                                                                                   "$tmp_plain"
+guard "<<- heredoc with tab-indented delimiter allowed" 0 "cat <<-EOF
+	$P --force
+	EOF"                                                                                  "$tmp_plain"
+guard "push -f after a heredoc still blocked" 2 "cat > f <<EOF
+$P -f
+EOF
+$P -f"                                                                                 "$tmp_plain"
+guard "here-string is not a heredoc"         2 "cat <<< x; $P -f"                     "$tmp_plain"
+check "subagent call skips git safety"       0 bash-guard.sh "$(jq -nc --arg c "$P --force" --arg d "$tmp_plain" '{tool_input:{command:$c},cwd:$d,agent_id:"ag-1"}')"
+guard_err "force-push message offers the ! escape" 2 "$P --force" "$tmp_plain" "! git push --force"
+guard_err "blanket-add message says stage explicit paths" 2 "$A -A" "$tmp_plain" "stage explicit paths"
 
 # Foreground waiting: a poll loop or a >=10s delay on the main thread is blocked; the same
 # work with run_in_background is not, and short settling delays outside a loop stay allowed.
@@ -368,6 +467,54 @@ WORKFLOW_SPEC_GATE=off check "kill switch -> allowed" 0 spec-gate-check.sh "$(ed
 
 # Write creating a not-yet-existing directory must still resolve (readlink -m, not -f).
 check "write into missing dir -> blocked"     2 spec-gate-check.sh "$(ed "$deep/brand/new/dir/n.ts")"
+
+# Bash: a command that writes files is gated per written file, exactly like an Edit — so a
+# scripted bulk edit cannot route around the spec. The spec above is still unreviewed and
+# FREE_FILES is 0 here, so every detected write blocks.
+bs() { # bs <command> [cwd] -> Bash payload
+    jq -cn --arg c "$1" --arg cwd "${2:-$sg}" '{tool_name:"Bash",tool_input:{command:$c},cwd:$cwd}'
+}
+touch "$deep/t.ts"
+check "bash: sed -i on source -> blocked"       2 spec-gate-check.sh "$(bs "sed -i 's/a/b/' $deep/t.ts")"
+check "bash: sed without -i -> allowed"         0 spec-gate-check.sh "$(bs "sed -n 1p $deep/t.ts")"
+touch "$deep/list-item.ts"
+check "bash: '-i' inside a file name -> allowed" 0 spec-gate-check.sh "$(bs "sed -n 1p $deep/list-item.ts")"
+check "bash: sed -i.bak -> blocked"             2 spec-gate-check.sh "$(bs "sed -i.bak 's/a/b/' $deep/t.ts")"
+check "bash: perl -pi -> blocked"               2 spec-gate-check.sh "$(bs "perl -pi -e 's/a/b/' $deep/t.ts")"
+check "bash: redirect to new file -> blocked"   2 spec-gate-check.sh "$(bs "echo x > $deep/new.ts")"
+check "bash: 2>&1 and /tmp redirect -> allowed" 0 spec-gate-check.sh "$(bs "ls $deep 2>&1 > /tmp/wk-sg-test.log")"
+check "bash: tee -a -> blocked"                 2 spec-gate-check.sh "$(bs "echo x | tee -a $deep/t.ts")"
+check "bash: redirect to .md -> allowed"        0 spec-gate-check.sh "$(bs "echo x > $sg/NOTES.md")"
+check "bash: python heredoc write -> blocked"   2 spec-gate-check.sh "$(bs "python3 - <<'EOF'
+from pathlib import Path
+Path('$deep/t.ts').write_text('x')
+EOF")"
+check "bash: python read-only -> allowed"       0 spec-gate-check.sh "$(bs "python3 -c 'print(open(\"$deep/t.ts\").read())'")"
+# Dotted names (os.path, p.write) are not files; a heredoc '>' is a comparison, not a redirect.
+check "bash: dotted names not files -> allowed" 0 spec-gate-check.sh "$(bs "python3 - <<'EOF'
+import os.path
+if 2 > 1: open('/tmp/wk-sg-test.txt', 'w').write(os.path.sep)
+EOF")"
+mkdir -p "$sg/tools"
+printf "from pathlib import Path\nPath('%s').write_text('x')\n" "$deep/t.ts" > "$sg/tools/fix.py"
+check "bash: script file by path -> blocked"    2 spec-gate-check.sh "$(bs "python3 tools/fix.py")"
+check "bash: node -e writeFileSync -> blocked"  2 spec-gate-check.sh "$(bs "node -e \"require('fs').writeFileSync('$deep/t.ts', 'x')\"")"
+check "bash: read-only command -> allowed"      0 spec-gate-check.sh "$(bs "cat $deep/t.ts | wc -l")"
+check_stderr "bash: block names the file"       2 spec-gate-check.sh "$(bs "sed -i 's/a/b/' $deep/t.ts")" "Bash write blocked — this command writes $deep/t.ts"
+WORKFLOW_SPEC_GATE=off check "bash: kill switch -> allowed" 0 spec-gate-check.sh "$(bs "sed -i 's/a/b/' $deep/t.ts")"
+# Edit and Bash writes spend ONE free-file budget: mixing tools must not double the allowance.
+rm -f "$sg/.claude/.spec-gate/touched"
+touch "$deep/f2.ts"
+WORKFLOW_SPEC_GATE_FREE_FILES=2 check "budget: edit 1st file free"   0 spec-gate-check.sh "$(ed "$deep/f1.ts")"
+WORKFLOW_SPEC_GATE_FREE_FILES=2 check "budget: bash 2nd file free"   0 spec-gate-check.sh "$(bs "sed -i 's/a/b/' $deep/f2.ts")"
+WORKFLOW_SPEC_GATE_FREE_FILES=2 check "budget: edit 3rd file gated"  2 spec-gate-check.sh "$(ed "$deep/f3.ts")"
+# A reviewed spec opens the gate for Bash writes too.
+cp "$SPEC_DIR/x.md" "$sg/x.md.bak"
+{ printf '# Spec: x\n\n## Adversarial review\n\n'; printf -- '- %s: x\n- GAP: y\n- NOTE: z\n' "$SEV"; } > "$SPEC_DIR/x.md"
+printf '%s\n' "$SPEC_DIR/x.md" > "$sg/.claude/.spec-gate/current"
+check "bash: reviewed spec -> allowed"          0 spec-gate-check.sh "$(bs "sed -i 's/a/b/' $deep/t.ts")"
+mv "$sg/x.md.bak" "$SPEC_DIR/x.md"
+rm -rf "$sg/tools" "$sg/.claude/.spec-gate/current" "$sg/.claude/.spec-gate/touched" /tmp/wk-sg-test.log /tmp/wk-sg-test.txt
 
 # ExitPlanMode is gated from the plan text (tool_input.plan), never from prior edits: in plan
 # mode nothing has been edited yet. Fixtures use generic paths only.
